@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialApp Clone - Connect with Friends</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="container">
+                <div class="header-content">
+                    <div class="logo">
+                        <i class="fas fa-share-alt"></i>
+                        <span>SocialApp</span>
+                    </div>
+                    
+                    <nav class="nav">
+                        <a href="#" class="nav-link active">
+                            <i class="fas fa-home"></i>
+                            <span>Home</span>
+                        </a>
+                        <a href="#" class="nav-link">
+                            <i class="fas fa-compass"></i>
+                            <span>Explore</span>
+                        </a>
+                        <a href="#" class="nav-link">
+                            <i class="fas fa-bell"></i>
+                            <span>Notifications</span>
+                        </a>
+                    </nav>
+
+                    <div class="user-info">
+                        <div class="user-status">
+                            <span class="status-indicator online"></span>
+                            <span id="username-display">Guest</span>
+                        </div>
+                        <div class="online-count">
+                            <i class="fas fa-users"></i>
+                            <span id="online-users">0</span> online
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <div class="container">
+                <div class="layout">
+                    <!-- Sidebar -->
+                    <aside class="sidebar">
+                        <div class="sidebar-section">
+                            <h3>Quick Stats</h3>
+                            <div class="stats">
+                                <div class="stat-item">
+                                    <i class="fas fa-file-alt"></i>
+                                    <div>
+                                        <span id="total-posts">0</span>
+                                        <small>Posts</small>
+                                    </div>
+                                </div>
+                                <div class="stat-item">
+                                    <i class="fas fa-heart"></i>
+                                    <div>
+                                        <span id="total-likes">0</span>
+                                        <small>Likes</small>
+                                    </div>
+                                </div>
+                                <div class="stat-item">
+                                    <i class="fas fa-comments"></i>
+                                    <div>
+                                        <span id="total-comments">0</span>
+                                        <small>Comments</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-section">
+                            <h3>Trending</h3>
+                            <div id="trending-topics" class="trending-list">
+                                <div class="trending-item">
+                                    <span class="hashtag">#welcome</span>
+                                    <span class="count">5 posts</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-section">
+                            <h3>Online Users</h3>
+                            <div id="online-users-list" class="users-list">
+                                <!-- Online users will be populated here -->
+                            </div>
+                        </div>
+                    </aside>
+
+                    <!-- Feed -->
+                    <div class="feed">
+                        <!-- Welcome Modal -->
+                        <div id="welcome-modal" class="modal">
+                            <div class="modal-content">
+                                <h2>Welcome to SocialApp! 👋</h2>
+                                <p>Enter your name to start connecting with others</p>
+                                <input type="text" id="username-input" placeholder="Your name" maxlength="30">
+                                <button id="join-btn" class="btn btn-primary">
+                                    <i class="fas fa-sign-in-alt"></i>
+                                    Join the Community
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Post Creation -->
+                        <div class="post-creator" style="display: none;">
+                            <div class="creator-header">
+                                <i class="fas fa-edit"></i>
+                                <span>What's on your mind?</span>
+                            </div>
+                            <textarea id="post-content" placeholder="Share something interesting..." maxlength="500"></textarea>
+                            <div class="creator-footer">
+                                <div class="creator-options">
+                                    <button class="option-btn" title="Add Photo">
+                                        <i class="fas fa-image"></i>
+                                    </button>
+                                    <button class="option-btn" title="Add Location">
+                                        <i class="fas fa-map-marker-alt"></i>
+                                    </button>
+                                    <button class="option-btn" title="Add Emoji">
+                                        <i class="fas fa-smile"></i>
+                                    </button>
+                                </div>
+                                <div class="creator-actions">
+                                    <span id="char-count">0/500</span>
+                                    <button id="post-btn" class="btn btn-primary" disabled>
+                                        <i class="fas fa-paper-plane"></i>
+                                        Post
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Posts Feed -->
+                        <div id="posts-feed" class="posts-feed">
+                            <!-- Posts will be dynamically loaded here -->
+                        </div>
+
+                        <!-- Loading Spinner -->
+                        <div id="loading" class="loading">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <span>Loading posts...</span>
+                        </div>
+                    </div>
+
+                    <!-- Activity Feed -->
+                    <aside class="activity-sidebar">
+                        <div class="activity-section">
+                            <h3>Live Activity</h3>
+                            <div id="activity-feed" class="activity-feed">
+                                <!-- Live activity will appear here -->
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

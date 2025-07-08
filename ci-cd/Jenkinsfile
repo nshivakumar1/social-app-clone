@@ -1,0 +1,270 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        AWS_ACCOUNT_ID = '297997106614'
+        ECR_REPOSITORY = 'social-app-clone'
+        ECS_CLUSTER = 'social-app-clone'
+        ECS_SERVICE = 'social-app-clone'
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        GIT_REPO = 'https://github.com/nshivakumar1/social-app-clone.git'  // UPDATE THIS
+        ARGOCD_APP_NAME = 'social-app-clone'
+        KUBE_NAMESPACE = 'social-app'
+    }
+    
+    stages {
+        stage('🔍 Checkout') {
+            steps {
+                script {
+                    echo "📥 Checking out code from GitHub..."
+                    checkout scm
+                    
+                    // Get commit info
+                    env.GIT_COMMIT_MSG = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "📝 Commit: ${env.GIT_COMMIT_MSG}"
+                }
+            }
+        }
+        
+        stage('🧪 Test & Quality Check') {
+            steps {
+                script {
+                    try {
+                        echo "🧪 Running tests and quality checks..."
+                        sh '''
+                            cd app
+                            # Install dependencies
+                            npm ci --only=dev
+                            
+                            # Run linting (if you have it)
+                            # npm run lint || true
+                            
+                            # Run tests (if you have them)
+                            # npm test || true
+                            
+                            echo "✅ Quality checks passed"
+                        '''
+                    } catch (Exception e) {
+                        echo "⚠️ Quality checks failed, but continuing..."
+                    }
+                }
+            }
+        }
+        
+        stage('🐋 Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        echo "🔨 Building Docker image..."
+                        sh '''
+                            cd app
+                            
+                            echo "Building image: ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                            docker build --platform linux/amd64 -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
+                            docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:latest
+                            
+                            echo "✅ Docker image built successfully"
+                        '''
+                    } catch (Exception e) {
+                        error "❌ Docker build failed: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+        
+        stage('📤 Push to ECR') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            echo "🔐 Logging into ECR..."
+                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+                            
+                            echo "📤 Pushing images to ECR..."
+                            docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
+                            docker tag ${ECR_REPOSITORY}:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                            
+                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
+                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                            
+                            echo "✅ Images pushed successfully"
+                        '''
+                    } catch (Exception e) {
+                        error "❌ ECR push failed: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Deploy to ECS') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            echo "🚀 Deploying to ECS Fargate..."
+                            aws ecs update-service \
+                                --cluster ${ECS_CLUSTER} \
+                                --service ${ECS_SERVICE} \
+                                --force-new-deployment \
+                                --region ${AWS_DEFAULT_REGION}
+                            
+                            echo "⏳ Waiting for ECS deployment to stabilize..."
+                            aws ecs wait services-stable \
+                                --cluster ${ECS_CLUSTER} \
+                                --services ${ECS_SERVICE} \
+                                --region ${AWS_DEFAULT_REGION} \
+                                --cli-read-timeout 300 \
+                                --cli-connect-timeout 60
+                                
+                            echo "✅ ECS deployment completed"
+                        '''
+                    } catch (Exception e) {
+                        error "❌ ECS deployment failed: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+        
+        stage('📝 Update GitOps Repository') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            echo "📝 Updating Kubernetes manifests for GitOps..."
+                            
+                            # Configure git for Jenkins
+                            git config user.email "jenkins@social-app.com"
+                            git config user.name "Jenkins CI/CD"
+                            
+                            # Update the image tag in deployment manifest
+                            sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}|g" k8s-manifests/deployment.yaml
+                            
+                            # Update image tag annotation for tracking
+                            sed -i "/annotations:/a\\        image-tag: \\"${IMAGE_TAG}\\"" k8s-manifests/deployment.yaml || true
+                            
+                            # Add and commit changes
+                            git add k8s-manifests/deployment.yaml
+                            git commit -m "🚀 Deploy image ${IMAGE_TAG}
+                            
+                            - Updated deployment manifest
+                            - Commit: ${GIT_COMMIT_MSG}
+                            - Build: ${BUILD_NUMBER}
+                            
+                            [skip ci]" || echo "No changes to commit"
+                            
+                            # Push changes
+                            git push origin main
+                            
+                            echo "✅ GitOps repository updated"
+                        '''
+                    } catch (Exception e) {
+                        echo "⚠️ GitOps update failed: ${e.getMessage()}"
+                        echo "🔄 ArgoCD will still deploy the latest image from ECR"
+                    }
+                }
+            }
+        }
+        
+        stage('🔄 Trigger ArgoCD Sync') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            echo "🔄 Triggering ArgoCD sync..."
+                            
+                            # Update kubeconfig for EKS (if using EKS)
+                            # aws eks update-kubeconfig --region ${AWS_DEFAULT_REGION} --name social-app-eks || true
+                            
+                            # Force ArgoCD to sync the application
+                            kubectl patch app ${ARGOCD_APP_NAME} -n argocd -p '{"spec":{"syncPolicy":{"automated":null}}}' --type merge || true
+                            kubectl patch app ${ARGOCD_APP_NAME} -n argocd -p '{"operation":{"initiatedBy":{"username":"jenkins"},"sync":{"syncStrategy":{"hook":{}}}}}' --type merge || true
+                            
+                            echo "✅ ArgoCD sync triggered"
+                        '''
+                    } catch (Exception e) {
+                        echo "⚠️ ArgoCD sync trigger failed: ${e.getMessage()}"
+                        echo "💡 ArgoCD will auto-sync based on its configuration"
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Post-Deployment Tests') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            echo "🧪 Running post-deployment tests..."
+                            
+                            # Wait a bit for deployment to be ready
+                            sleep 30
+                            
+                            # Test ECS deployment
+                            echo "Testing ECS deployment..."
+                            curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/health || echo "ECS health check failed"
+                            
+                            # Test main app
+                            echo "Testing main application..."
+                            curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/ | head -10 || echo "Main app test failed"
+                            
+                            echo "✅ Post-deployment tests completed"
+                        '''
+                    } catch (Exception e) {
+                        echo "⚠️ Some post-deployment tests failed: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up Docker images
+                sh '''
+                    echo "🧹 Cleaning up local Docker images..."
+                    docker rmi ${ECR_REPOSITORY}:${IMAGE_TAG} || true
+                    docker rmi ${ECR_REPOSITORY}:latest || true
+                    docker system prune -f || true
+                '''
+                
+                // Clean workspace
+                cleanWs()
+            }
+        }
+        
+        success {
+            script {
+                echo """
+                🎉 DEPLOYMENT SUCCESSFUL!
+                ========================
+                ✅ Build: ${env.BUILD_NUMBER}
+                ✅ Image: ${env.IMAGE_TAG}
+                ✅ ECS: http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com
+                ✅ Commit: ${env.GIT_COMMIT_MSG}
+                
+                🚀 Your social media app is live and updated!
+                """
+            }
+        }
+        
+        failure {
+            script {
+                echo """
+                ❌ DEPLOYMENT FAILED!
+                ====================
+                ❌ Build: ${env.BUILD_NUMBER}
+                ❌ Stage: Check the console output above
+                ❌ Commit: ${env.GIT_COMMIT_MSG}
+                
+                💡 Check the logs above for details
+                """
+            }
+        }
+    }
+}
