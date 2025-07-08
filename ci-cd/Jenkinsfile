@@ -285,7 +285,7 @@ EOF
                 📝 GitOps manifests are in infrastructure/k8s-manifests for ArgoCD
                 """
                 
-                // ONLY THIS LINE - NO OTHER NOTIFICATION CODE
+                
                 sendNotifications('success')
             }
         }
@@ -341,10 +341,6 @@ def sendNotifications(String status) {
             
             // Send Jira notification with Jenkins-compliant methods
             try {
-            
-# Replace your Jira section in Jenkins pipeline with this:
-
-# REPLACE your entire Jira notification section in Jenkins with this:
 
 echo '🔍 Starting Jira notification process...'
 echo '📝 Fetching Jira username from AWS Systems Manager...'
