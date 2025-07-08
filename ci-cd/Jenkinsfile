@@ -341,7 +341,7 @@ def sendNotifications(String status) {
             
             // Send Jira notification with Jenkins-compliant methods
             try {
-                # Bulletproof Jira integration for Jenkins pipeline
+            
 # Replace your Jira section in Jenkins pipeline with this:
 
 # REPLACE your entire Jira notification section in Jenkins with this:
@@ -405,3 +405,4 @@ else
 fi
 
 echo '🏁 Jira notification process completed'
+ }

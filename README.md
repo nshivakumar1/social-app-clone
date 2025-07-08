@@ -121,15 +121,23 @@ This project demonstrates a complete DevOps implementation for a modern social m
 - **Testing**: Jest (ready)
 - **Documentation**: Markdown
 
-###Screenshots
-![LiveApp] (./docs/images/App-WelcomeScreen.png)
-![FirstTweet] (./docs/images/First Tweet Post.png)
-![JenkinsDeployment] (./docs/images/Jenkins Successful Deployment.png)
-![ArgoCDDeployment] (./docs/images/ArgoCD- Deployment.png)
-![SlackNotifcation] (./docs/images/Slack-Notification.png)
-![EC2Metrics] (./docs/images/EC2 Metrics.png)
-![ECSClusterMetrics] (./docs/images/ECS Cluster-Cloudwatch.png)
-![EBSVolumeMetrics] (./docs/images/Elastic LoadBalancing Metrics.png)
+### 📸 Screenshots
+
+#### Application Interface
+![Live Application Welcome Screen](./docs/images/App-WelcomeScreen.png)
+
+#### Social Features
+![First Tweet Posted](./docs/images/First-Tweet-Post.png)
+
+#### CI/CD Pipeline
+![Jenkins Successful Deployment](./docs/images/Jenkins-Successful-Deployment.png)
+![ArgoCD Deployment Status](./docs/images/ArgoCD-Deployment.png)
+![Slack Deployment Notification](./docs/images/Slack-Notification.png)
+
+#### Infrastructure Monitoring
+![EC2 Instance Metrics](./docs/images/EC2-Metrics.png)
+![ECS Cluster Metrics](./docs/images/ECS-Cluster-Cloudwatch.png)
+![Load Balancer Metrics](./docs/images/Elastic-LoadBalancing-Metrics.png)
 
 ## 🚀 Quick Start
 
