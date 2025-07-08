@@ -2,10 +2,19 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: social-app-clone
+  namespace: social-app
   labels:
     app: social-app-clone
+    version: v1
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: social-app-clone
@@ -13,12 +22,18 @@ spec:
     metadata:
       labels:
         app: social-app-clone
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
     spec:
       containers:
       - name: social-app-clone
-        image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:IMAGE_TAG
+        image: 297997106614.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:latest
         ports:
         - containerPort: 3000
+          name: http
+          protocol: TCP
         env:
         - name: NODE_ENV
           value: "production"
@@ -37,9 +52,18 @@ spec:
             port: 3000
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /health
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 10"]
+      terminationGracePeriodSeconds: 30

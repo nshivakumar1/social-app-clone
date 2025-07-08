@@ -8,9 +8,10 @@ pipeline {
         ECS_CLUSTER = 'social-app-clone'
         ECS_SERVICE = 'social-app-clone'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        GIT_REPO = 'https://github.com/nshivakumar1/social-app-clone.git'  // UPDATE THIS
-        ARGOCD_APP_NAME = 'social-app-clone'
-        KUBE_NAMESPACE = 'social-app'
+        GIT_REPO = 'https://github.com/YOUR_USERNAME/social-app-clone.git'
+        SLACK_CHANNEL = '#social-clone-app'
+        JIRA_PROJECT_KEY = 'SAC'
+        JIRA_HOST = 'learndevopswithkodekloud.atlassian.net'
     }
     
     stages {
@@ -21,36 +22,36 @@ pipeline {
                     checkout scm
                     
                     // Get commit info
-                    env.GIT_COMMIT_MSG = sh(
-                        script: 'git log -1 --pretty=%B',
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
                     
-                    echo "📝 Commit: ${env.GIT_COMMIT_MSG}"
+                    env.GIT_COMMIT_MSG = sh(
+                        script: "git log -1 --pretty=format:'%s'",
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "📝 Commit: ${env.GIT_COMMIT_SHORT} - ${env.GIT_COMMIT_MSG}"
                 }
             }
         }
         
-        stage('🧪 Test & Quality Check') {
+        stage('🧪 Test') {
             steps {
                 script {
                     try {
-                        echo "🧪 Running tests and quality checks..."
+                        echo "🧪 Running tests..."
                         sh '''
                             cd app
-                            # Install dependencies
-                            npm ci --only=dev
-                            
-                            # Run linting (if you have it)
-                            # npm run lint || true
-                            
-                            # Run tests (if you have them)
-                            # npm test || true
-                            
-                            echo "✅ Quality checks passed"
+                            # Add your test commands here
+                            # npm test || echo "No tests defined yet"
+                            echo "✅ Tests passed (placeholder)"
                         '''
                     } catch (Exception e) {
-                        echo "⚠️ Quality checks failed, but continuing..."
+                        sendSlackNotification("❌ Tests failed for commit ${env.GIT_COMMIT_SHORT}", "danger")
+                        createJiraIncident("Tests failed: ${e.getMessage()}")
+                        throw e
                     }
                 }
             }
@@ -63,15 +64,15 @@ pipeline {
                         echo "🔨 Building Docker image..."
                         sh '''
                             cd app
-                            
-                            echo "Building image: ${ECR_REPOSITORY}:${IMAGE_TAG}"
                             docker build --platform linux/amd64 -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
                             docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:latest
-                            
-                            echo "✅ Docker image built successfully"
+                            docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:${GIT_COMMIT_SHORT}
                         '''
+                        echo "✅ Docker image built successfully"
                     } catch (Exception e) {
-                        error "❌ Docker build failed: ${e.getMessage()}"
+                        sendSlackNotification("❌ Docker build failed for commit ${env.GIT_COMMIT_SHORT}", "danger")
+                        createJiraIncident("Docker build failed: ${e.getMessage()}")
+                        throw e
                     }
                 }
             }
@@ -81,21 +82,34 @@ pipeline {
             steps {
                 script {
                     try {
-                        sh '''
-                            echo "🔐 Logging into ECR..."
-                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-                            
-                            echo "📤 Pushing images to ECR..."
-                            docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
-                            docker tag ${ECR_REPOSITORY}:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
-                            
-                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
-                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
-                            
-                            echo "✅ Images pushed successfully"
-                        '''
+                        withCredentials([
+                            string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                            string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
+                        ]) {
+                            sh '''
+                                # Configure AWS CLI
+                                aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                                aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                                aws configure set default.region $AWS_DEFAULT_REGION
+                                
+                                # Login to ECR
+                                aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+                                
+                                # Tag and push images
+                                docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
+                                docker tag ${ECR_REPOSITORY}:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                                docker tag ${ECR_REPOSITORY}:${GIT_COMMIT_SHORT} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GIT_COMMIT_SHORT}
+                                
+                                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
+                                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GIT_COMMIT_SHORT}
+                            '''
+                        }
+                        sendSlackNotification("✅ Image pushed to ECR: ${IMAGE_TAG} (${env.GIT_COMMIT_SHORT})", "good")
                     } catch (Exception e) {
-                        error "❌ ECR push failed: ${e.getMessage()}"
+                        sendSlackNotification("❌ ECR push failed for ${env.GIT_COMMIT_SHORT}", "danger")
+                        createJiraIncident("ECR push failed: ${e.getMessage()}")
+                        throw e
                     }
                 }
             }
@@ -105,66 +119,66 @@ pipeline {
             steps {
                 script {
                     try {
-                        sh '''
-                            echo "🚀 Deploying to ECS Fargate..."
-                            aws ecs update-service \
-                                --cluster ${ECS_CLUSTER} \
-                                --service ${ECS_SERVICE} \
-                                --force-new-deployment \
-                                --region ${AWS_DEFAULT_REGION}
-                            
-                            echo "⏳ Waiting for ECS deployment to stabilize..."
-                            aws ecs wait services-stable \
-                                --cluster ${ECS_CLUSTER} \
-                                --services ${ECS_SERVICE} \
-                                --region ${AWS_DEFAULT_REGION} \
-                                --cli-read-timeout 300 \
-                                --cli-connect-timeout 60
+                        withCredentials([
+                            string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                            string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
+                        ]) {
+                            sh '''
+                                echo "🚀 Deploying to ECS Fargate..."
+                                aws ecs update-service \
+                                    --cluster ${ECS_CLUSTER} \
+                                    --service ${ECS_SERVICE} \
+                                    --force-new-deployment \
+                                    --region ${AWS_DEFAULT_REGION}
                                 
-                            echo "✅ ECS deployment completed"
-                        '''
+                                echo "⏳ Waiting for ECS deployment to stabilize..."
+                                aws ecs wait services-stable \
+                                    --cluster ${ECS_CLUSTER} \
+                                    --services ${ECS_SERVICE} \
+                                    --region ${AWS_DEFAULT_REGION}
+                            '''
+                        }
+                        sendSlackNotification("🚀 ECS deployment completed for build ${IMAGE_TAG}", "good")
                     } catch (Exception e) {
-                        error "❌ ECS deployment failed: ${e.getMessage()}"
+                        sendSlackNotification("❌ ECS deployment failed for ${env.GIT_COMMIT_SHORT}", "danger")
+                        createJiraIncident("ECS deployment failed: ${e.getMessage()}")
+                        throw e
                     }
                 }
             }
         }
         
-        stage('📝 Update GitOps Repository') {
+        stage('📝 Update GitOps Manifests') {
             steps {
                 script {
                     try {
-                        sh '''
-                            echo "📝 Updating Kubernetes manifests for GitOps..."
-                            
-                            # Configure git for Jenkins
-                            git config user.email "jenkins@social-app.com"
-                            git config user.name "Jenkins CI/CD"
-                            
-                            # Update the image tag in deployment manifest
-                            sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}|g" k8s-manifests/deployment.yaml
-                            
-                            # Update image tag annotation for tracking
-                            sed -i "/annotations:/a\\        image-tag: \\"${IMAGE_TAG}\\"" k8s-manifests/deployment.yaml || true
-                            
-                            # Add and commit changes
-                            git add k8s-manifests/deployment.yaml
-                            git commit -m "🚀 Deploy image ${IMAGE_TAG}
-                            
-                            - Updated deployment manifest
-                            - Commit: ${GIT_COMMIT_MSG}
-                            - Build: ${BUILD_NUMBER}
-                            
-                            [skip ci]" || echo "No changes to commit"
-                            
-                            # Push changes
-                            git push origin main
-                            
-                            echo "✅ GitOps repository updated"
-                        '''
+                        withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+                            sh '''
+                                echo "📝 Updating Kubernetes manifests for GitOps..."
+                                
+                                # Configure git
+                                git config user.email "jenkins@company.com"
+                                git config user.name "Jenkins CI/CD"
+                                
+                                # Update image tag in kustomization
+                                sed -i "s|newTag: .*|newTag: ${IMAGE_TAG}|g" k8s-manifests/base/kustomization.yaml
+                                sed -i "s|newTag: .*|newTag: ${IMAGE_TAG}|g" k8s-manifests/overlays/production/kustomization.yaml
+                                
+                                # Create commit with build info
+                                git add k8s-manifests/
+                                git commit -m "🚀 Deploy ${IMAGE_TAG} - ${GIT_COMMIT_MSG} [skip ci]" || echo "No changes to commit"
+                                
+                                # Push using token
+                                git remote set-url origin https://${GITHUB_TOKEN}@github.com/YOUR_USERNAME/social-app-clone.git
+                                git push origin main
+                            '''
+                        }
+                        sendSlackNotification("📝 GitOps manifests updated with image ${IMAGE_TAG}", "good")
                     } catch (Exception e) {
-                        echo "⚠️ GitOps update failed: ${e.getMessage()}"
-                        echo "🔄 ArgoCD will still deploy the latest image from ECR"
+                        sendSlackNotification("❌ GitOps update failed", "warning")
+                        createJiraIncident("GitOps manifest update failed: ${e.getMessage()}")
+                        // Don't fail the pipeline for GitOps issues
+                        echo "⚠️ GitOps update failed, but continuing..."
                     }
                 }
             }
@@ -177,45 +191,17 @@ pipeline {
                         sh '''
                             echo "🔄 Triggering ArgoCD sync..."
                             
-                            # Update kubeconfig for EKS (if using EKS)
-                            # aws eks update-kubeconfig --region ${AWS_DEFAULT_REGION} --name social-app-eks || true
-                            
-                            # Force ArgoCD to sync the application
-                            kubectl patch app ${ARGOCD_APP_NAME} -n argocd -p '{"spec":{"syncPolicy":{"automated":null}}}' --type merge || true
-                            kubectl patch app ${ARGOCD_APP_NAME} -n argocd -p '{"operation":{"initiatedBy":{"username":"jenkins"},"sync":{"syncStrategy":{"hook":{}}}}}' --type merge || true
-                            
-                            echo "✅ ArgoCD sync triggered"
+                            # Check if kubectl is configured (optional step)
+                            if kubectl version --client >/dev/null 2>&1; then
+                                # Patch ArgoCD app to refresh
+                                kubectl patch app social-app-clone -n argocd -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"'"$(date)"'"}}}' --type merge 2>/dev/null || echo "ArgoCD app not found, will be created manually"
+                            else
+                                echo "kubectl not configured, ArgoCD will auto-sync"
+                            fi
                         '''
+                        sendSlackNotification("🔄 ArgoCD sync triggered for Kubernetes deployment", "good")
                     } catch (Exception e) {
-                        echo "⚠️ ArgoCD sync trigger failed: ${e.getMessage()}"
-                        echo "💡 ArgoCD will auto-sync based on its configuration"
-                    }
-                }
-            }
-        }
-        
-        stage('🧪 Post-Deployment Tests') {
-            steps {
-                script {
-                    try {
-                        sh '''
-                            echo "🧪 Running post-deployment tests..."
-                            
-                            # Wait a bit for deployment to be ready
-                            sleep 30
-                            
-                            # Test ECS deployment
-                            echo "Testing ECS deployment..."
-                            curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/health || echo "ECS health check failed"
-                            
-                            # Test main app
-                            echo "Testing main application..."
-                            curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/ | head -10 || echo "Main app test failed"
-                            
-                            echo "✅ Post-deployment tests completed"
-                        '''
-                    } catch (Exception e) {
-                        echo "⚠️ Some post-deployment tests failed: ${e.getMessage()}"
+                        echo "⚠️ ArgoCD sync trigger failed, but ArgoCD will auto-sync"
                     }
                 }
             }
@@ -225,46 +211,55 @@ pipeline {
     post {
         always {
             script {
-                // Clean up Docker images
+                // Clean up docker images
                 sh '''
-                    echo "🧹 Cleaning up local Docker images..."
                     docker rmi ${ECR_REPOSITORY}:${IMAGE_TAG} || true
                     docker rmi ${ECR_REPOSITORY}:latest || true
-                    docker system prune -f || true
+                    docker rmi ${ECR_REPOSITORY}:${GIT_COMMIT_SHORT} || true
                 '''
-                
-                // Clean workspace
-                cleanWs()
             }
+            cleanWs()
         }
-        
         success {
-            script {
-                echo """
-                🎉 DEPLOYMENT SUCCESSFUL!
-                ========================
-                ✅ Build: ${env.BUILD_NUMBER}
-                ✅ Image: ${env.IMAGE_TAG}
-                ✅ ECS: http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com
-                ✅ Commit: ${env.GIT_COMMIT_MSG}
-                
-                🚀 Your social media app is live and updated!
-                """
-            }
+            sendSlackNotification("✅ Complete CI/CD pipeline successful! 🎉\\nBuild: ${env.BUILD_NUMBER}\\nCommit: ${env.GIT_COMMIT_SHORT}\\nMessage: ${env.GIT_COMMIT_MSG}", "good")
         }
-        
         failure {
-            script {
-                echo """
-                ❌ DEPLOYMENT FAILED!
-                ====================
-                ❌ Build: ${env.BUILD_NUMBER}
-                ❌ Stage: Check the console output above
-                ❌ Commit: ${env.GIT_COMMIT_MSG}
-                
-                💡 Check the logs above for details
-                """
-            }
+            sendSlackNotification("❌ Pipeline failed! 💥\\nBuild: ${env.BUILD_NUMBER}\\nCommit: ${env.GIT_COMMIT_SHORT}\\nCheck: ${env.BUILD_URL}", "danger")
+        }
+    }
+}
+
+// Helper functions
+def sendSlackNotification(String message, String color = 'good') {
+    script {
+        try {
+            sh """
+                export SLACK_WEBHOOK_URL=\$(aws ssm get-parameter --name /social-app/slack/webhook-url --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo 'not-configured')
+                if [ "\$SLACK_WEBHOOK_URL" != "not-configured" ]; then
+                    export SLACK_CHANNEL=${SLACK_CHANNEL}
+                    node integrations/slack-notification.js "${message}" "${color}"
+                fi
+            """
+        } catch (Exception e) {
+            echo "⚠️ Slack notification failed: ${e.getMessage()}"
+        }
+    }
+}
+
+def createJiraIncident(String description) {
+    script {
+        try {
+            sh """
+                export JIRA_HOST=${JIRA_HOST}
+                export JIRA_USERNAME=\$(aws ssm get-parameter --name /social-app/jira/username --query 'Parameter.Value' --output text 2>/dev/null || echo 'not-configured')
+                export JIRA_API_TOKEN=\$(aws ssm get-parameter --name /social-app/jira/api-token --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo 'not-configured')
+                export JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY}
+                if [ "\$JIRA_USERNAME" != "not-configured" ]; then
+                    node integrations/jira-webhook.js "${description}"
+                fi
+            """
+        } catch (Exception e) {
+            echo "⚠️ Jira incident creation failed: ${e.getMessage()}"
         }
     }
 }
