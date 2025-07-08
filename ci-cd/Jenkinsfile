@@ -9,8 +9,6 @@ pipeline {
         ECS_SERVICE = 'social-app-clone'
         EKS_CLUSTER = 'social-app-eks'
         IMAGE_TAG = "${BUILD_NUMBER}"
-        
-        // App URLs
         ECS_URL = 'http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com'
     }
     
@@ -34,10 +32,6 @@ pipeline {
                     echo "🧪 Running tests..."
                     dir('app') {
                         sh 'echo "✅ Tests passed (placeholder)"'
-                        // Add your actual tests here:
-                        // sh 'npm ci --only=dev'
-                        // sh 'npm run test'
-                        // sh 'npm run lint'
                     }
                 }
             }
@@ -167,7 +161,6 @@ spec:
 EOF
                         """
                         
-                        // Commit GitOps changes back to repo
                         sh "git config user.email jenkins@social-app.com"
                         sh "git config user.name 'Jenkins GitOps'"
                         sh "git add infrastructure/k8s-manifests/ || true"
@@ -189,17 +182,13 @@ EOF
                     withCredentials([aws(credentialsId: 'aws-credentials')]) {
                         try {
                             sh "echo '🔄 Configuring EKS kubeconfig...'"
-                            
-                            // Update kubeconfig for EKS
                             sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER} || echo 'EKS cluster not found or no access'"
                             
-                            // Test kubectl connection
                             def kubectlWorks = sh(script: 'kubectl get nodes', returnStatus: true) == 0
                             
                             if (kubectlWorks) {
                                 sh "echo '✅ kubectl connection successful'"
                                 
-                                // Create ArgoCD application
                                 sh """
 kubectl apply -f - << 'EOF' || echo "Failed to create ArgoCD application"
 apiVersion: argoproj.io/v1alpha1
@@ -233,9 +222,7 @@ spec:
 EOF
                                 """
                                 
-                                // Trigger sync
                                 sh 'kubectl patch app social-app-clone -n argocd -p \'{"operation":{"initiatedBy":{"username":"jenkins"},"sync":{"syncStrategy":{"hook":{}}}}}\' --type merge || echo "Sync patch failed"'
-                                
                                 echo "✅ ArgoCD application configured and synced"
                             } else {
                                 echo "⚠️ kubectl not working - check EKS cluster and permissions"
@@ -298,7 +285,7 @@ EOF
                 📝 GitOps manifests are in infrastructure/k8s-manifests for ArgoCD
                 """
                 
-                // CRITICAL: This calls the enhanced notification function
+                // ONLY THIS LINE - NO OTHER NOTIFICATION CODE
                 sendNotifications('success')
             }
         }
@@ -317,21 +304,22 @@ EOF
                 📋 Check the build logs for details
                 """
                 
-                // CRITICAL: This calls the enhanced notification function
+                // ONLY THIS LINE - NO OTHER NOTIFICATION CODE
                 sendNotifications('failure')
             }
         }
     }
 }
 
-// ENHANCED NOTIFICATION FUNCTION - MUST BE OUTSIDE PIPELINE BLOCK
+// ENHANCED NOTIFICATION FUNCTION - OUTSIDE PIPELINE BLOCK
 def sendNotifications(String status) {
     withCredentials([aws(credentialsId: 'aws-credentials')]) {
         script {
-            // Send Slack notification (working!)
+            echo "🔔 Starting notification process for status: ${status}"
+            
+            // Send Slack notification
             try {
-                echo "🔔 Starting notification process for status: ${status}"
-                
+                echo "📱 Processing Slack notification..."
                 def slackWebhook = sh(
                     script: 'aws ssm get-parameter --name "/social-app/slack/webhook-url" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
                     returnStdout: true
@@ -345,26 +333,26 @@ def sendNotifications(String status) {
                     sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"${message}\"}' '${slackWebhook}' || echo 'Slack notification failed'"
                     echo "✅ Slack notification sent successfully"
                 } else {
-                    echo "💡 Slack not configured"
+                    echo "💡 Slack webhook not configured in AWS Systems Manager"
                 }
             } catch (Exception e) {
                 echo "⚠️ Slack notification failed: ${e.getMessage()}"
             }
             
-            // Send Jira notification with enhanced debugging
+            // Send Jira notification with Jenkins-compliant methods
             try {
                 echo "🔍 Starting Jira notification process..."
                 
                 def jiraHost = 'learndevopswithkodekloud.atlassian.net'
                 
-                echo "📝 Fetching Jira username..."
+                echo "📝 Fetching Jira username from AWS Systems Manager..."
                 def jiraUsername = sh(
                     script: 'aws ssm get-parameter --name "/social-app/jira/username" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
                     returnStdout: true
                 ).trim()
                 echo "👤 Jira username: ${jiraUsername}"
                 
-                echo "🔑 Fetching Jira API token..."
+                echo "🔑 Fetching Jira API token from AWS Systems Manager..."
                 def jiraToken = sh(
                     script: 'aws ssm get-parameter --name "/social-app/jira/api-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
                     returnStdout: true
@@ -372,7 +360,7 @@ def sendNotifications(String status) {
                 echo "🔑 Jira token status: ${jiraToken != 'not-configured' ? 'Found' : 'Not found'}"
                 
                 if (jiraUsername != "not-configured" && jiraToken != "not-configured") {
-                    echo "✅ Jira credentials found, creating issue..."
+                    echo "✅ Jira credentials found, proceeding with issue creation..."
                     
                     def issueType = status == 'success' ? 'Task' : 'Bug'
                     def priority = status == 'success' ? 'Medium' : 'High'
@@ -381,56 +369,28 @@ def sendNotifications(String status) {
                         "🚨 Deployment Failed - Social App Clone #${BUILD_NUMBER}"
                     
                     def description = status == 'success' ? 
-                        """Deployment completed successfully:
-• Build: #${BUILD_NUMBER}
-• Commit: ${env.COMMIT_SHA} by ${env.AUTHOR}
-• Image: ${ECR_REPOSITORY}:${IMAGE_TAG}
-• ECS URL: ${ECS_URL}
-• Message: ${env.COMMIT_MESSAGE}
-
-Deployed via Jenkins Pipeline: ${BUILD_URL}""" :
-                        """Deployment failed:
-• Build: #${BUILD_NUMBER}  
-• Commit: ${env.COMMIT_SHA} by ${env.AUTHOR}
-• Failed Stage: ${env.STAGE_NAME}
-• Message: ${env.COMMIT_MESSAGE}
-
-Check build logs: ${BUILD_URL}console"""
+                        "Deployment completed successfully:\\n• Build: #${BUILD_NUMBER}\\n• Commit: ${env.COMMIT_SHA}\\n• Image: ${ECR_REPOSITORY}:${IMAGE_TAG}\\n• ECS URL: ${ECS_URL}\\n• Message: ${env.COMMIT_MESSAGE}\\n\\nDeployed via Jenkins Pipeline: ${BUILD_URL}" :
+                        "Deployment failed:\\n• Build: #${BUILD_NUMBER}\\n• Commit: ${env.COMMIT_SHA}\\n• Failed Stage: ${env.STAGE_NAME}\\n• Message: ${env.COMMIT_MESSAGE}\\n\\nCheck build logs: ${BUILD_URL}console"
                     
-                    // First, let's test Jira connectivity
+                    // Test Jira API connectivity first using shell command
                     echo "🔍 Testing Jira API connectivity..."
-                    def auth = "${jiraUsername}:${jiraToken}".bytes.encodeBase64().toString()
                     
                     def connectivityTest = sh(
-                        script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Basic ${auth}' 'https://${jiraHost}/rest/api/2/myself'",
+                        script: "curl -s -o /dev/null -w '%{http_code}' -u '${jiraUsername}:${jiraToken}' 'https://${jiraHost}/rest/api/2/myself'",
                         returnStdout: true
                     ).trim()
                     echo "🔍 Jira API connectivity test result: HTTP ${connectivityTest}"
                     
                     if (connectivityTest == "200") {
-                        echo "✅ Jira authentication successful"
+                        echo "✅ Jira authentication successful, creating issue..."
                         
-                        // Create the issue
-                        def jiraPayload = [
-                            fields: [
-                                project: [key: "SAC"],
-                                summary: summary,
-                                description: description,
-                                issuetype: [name: issueType],
-                                priority: [name: priority],
-                                labels: ["jenkins", "deployment", "social-app-clone"]
-                            ]
-                        ]
-                        
-                        def payload = groovy.json.JsonBuilder(jiraPayload).toString()
-                        echo "📝 Creating Jira issue with payload: ${payload}"
-                        
+                        // Create the Jira issue using curl with basic auth
                         def jiraResponse = sh(
                             script: """
                             curl -X POST \\
-                              -H 'Authorization: Basic ${auth}' \\
+                              -u '${jiraUsername}:${jiraToken}' \\
                               -H 'Content-Type: application/json' \\
-                              -d '${payload.replace("'", "\\'")}' \\
+                              -d '{"fields":{"project":{"key":"SAC"},"summary":"${summary}","description":"${description}","issuetype":{"name":"${issueType}"},"priority":{"name":"${priority}"},"labels":["jenkins","deployment","social-app-clone"]}}' \\
                               -w 'HTTP_STATUS:%{http_code}' \\
                               'https://${jiraHost}/rest/api/2/issue/'
                             """,
@@ -438,31 +398,40 @@ Check build logs: ${BUILD_URL}console"""
                         ).trim()
                         echo "📋 Jira API response: ${jiraResponse}"
                         
-                        if (jiraResponse.contains('"key"')) {
-                            echo "✅ Jira issue created successfully"
+                        if (jiraResponse.contains('"key"') || jiraResponse.contains('HTTP_STATUS:201')) {
+                            echo "✅ Jira issue created successfully!"
                         } else {
                             echo "⚠️ Jira issue creation may have failed - check response above"
                         }
                     } else if (connectivityTest == "401") {
                         echo "❌ Jira authentication failed - check username and API token"
+                        echo "   Username used: ${jiraUsername}"
                     } else if (connectivityTest == "403") {
-                        echo "❌ Jira access forbidden - check permissions"
+                        echo "❌ Jira access forbidden - check user permissions"
+                    } else if (connectivityTest == "404") {
+                        echo "❌ Jira host not found - check URL: ${jiraHost}"
                     } else {
                         echo "❌ Jira connectivity failed - HTTP ${connectivityTest}"
                     }
                 } else {
                     echo "💡 Jira not configured properly:"
-                    echo "   Username: ${jiraUsername == 'not-configured' ? '❌ Missing' : '✅ Found'}"
-                    echo "   API Token: ${jiraToken == 'not-configured' ? '❌ Missing' : '✅ Found'}"
+                    echo "   Username parameter (/social-app/jira/username): ${jiraUsername == 'not-configured' ? '❌ Missing' : '✅ Found'}"
+                    echo "   API Token parameter (/social-app/jira/api-token): ${jiraToken == 'not-configured' ? '❌ Missing' : '✅ Found'}"
                     echo ""
                     echo "📋 To fix, create these parameters in AWS Systems Manager:"
-                    echo "   1. /social-app/jira/username (String) = your-email@company.com"
-                    echo "   2. /social-app/jira/api-token (SecureString) = your-jira-api-token"
+                    echo "   1. Parameter name: /social-app/jira/username"
+                    echo "      Type: String"
+                    echo "      Value: your-email@company.com"
+                    echo "   2. Parameter name: /social-app/jira/api-token"
+                    echo "      Type: SecureString"
+                    echo "      Value: your-jira-api-token"
                 }
             } catch (Exception e) {
                 echo "⚠️ Jira notification failed with exception: ${e.getMessage()}"
-                e.printStackTrace()
+                // Removed e.printStackTrace() as it's not allowed by Jenkins security
             }
+            
+            echo "🏁 Notification process completed"
         }
     }
 }

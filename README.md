@@ -5,3 +5,4 @@ Debug Jira integration with enhanced logging - Wed Jul  9 00:06:05 IST 2025
 Test enhanced Jira function integration - Wed Jul  9 00:20:18 IST 2025
 Final test with corrected Jenkinsfile - Wed Jul  9 00:34:10 IST 2025
 Clean Jenkinsfile with proper notification function calls - Wed Jul  9 00:44:48 IST 2025
+Fix Jenkins security restrictions for Jira integration - Wed Jul  9 00:51:26 IST 2025
