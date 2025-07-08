@@ -9,6 +9,9 @@ pipeline {
         ECS_SERVICE = 'social-app-clone'
         EKS_CLUSTER = 'social-app-eks'
         IMAGE_TAG = "${BUILD_NUMBER}"
+        
+        // App URLs
+        ECS_URL = 'http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com'
     }
     
     stages {
@@ -19,7 +22,8 @@ pipeline {
                     checkout scm
                     env.COMMIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     env.COMMIT_MESSAGE = sh(script: 'git log -1 --pretty=format:%s', returnStdout: true).trim()
-                    echo "📝 Commit: ${env.COMMIT_SHA} - ${env.COMMIT_MESSAGE}"
+                    env.AUTHOR = sh(script: 'git log -1 --pretty=format:%an', returnStdout: true).trim()
+                    echo "📝 Commit: ${env.COMMIT_SHA} by ${env.AUTHOR} - ${env.COMMIT_MESSAGE}"
                 }
             }
         }
@@ -30,6 +34,10 @@ pipeline {
                     echo "🧪 Running tests..."
                     dir('app') {
                         sh 'echo "✅ Tests passed (placeholder)"'
+                        // Add your actual tests here:
+                        // sh 'npm ci --only=dev'
+                        // sh 'npm run test'
+                        // sh 'npm run lint'
                     }
                 }
             }
@@ -90,15 +98,18 @@ pipeline {
                 script {
                     try {
                         sh "echo '📝 Creating Kubernetes manifests...'"
-                        sh "mkdir -p k8s-manifests"
+                        sh "mkdir -p infrastructure/k8s-manifests"
                         
                         sh """
-cat > k8s-manifests/deployment.yaml << 'EOF'
+cat > infrastructure/k8s-manifests/deployment.yaml << 'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: social-app-clone
   namespace: default
+  labels:
+    app: social-app-clone
+    version: "${IMAGE_TAG}"
 spec:
   replicas: 2
   selector:
@@ -108,6 +119,7 @@ spec:
     metadata:
       labels:
         app: social-app-clone
+        version: "${IMAGE_TAG}"
     spec:
       containers:
       - name: social-app-clone
@@ -117,6 +129,10 @@ spec:
         env:
         - name: NODE_ENV
           value: "production"
+        - name: BUILD_NUMBER
+          value: "${IMAGE_TAG}"
+        - name: COMMIT_SHA
+          value: "${env.COMMIT_SHA}"
         resources:
           requests:
             memory: "256Mi"
@@ -124,6 +140,18 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
 ---
 apiVersion: v1
 kind: Service
@@ -142,8 +170,8 @@ EOF
                         // Commit GitOps changes back to repo
                         sh "git config user.email jenkins@social-app.com"
                         sh "git config user.name 'Jenkins GitOps'"
-                        sh "git add k8s-manifests/ || true"
-                        sh "git diff --staged --quiet || git commit -m 'GitOps: Update image to ${IMAGE_TAG}' || true"
+                        sh "git add infrastructure/k8s-manifests/ || true"
+                        sh "git diff --staged --quiet || git commit -m 'GitOps: Update image to ${IMAGE_TAG} [skip ci]' || true"
                         sh "git push origin main || echo 'Push failed, but continuing...'"
                         
                         echo "✅ GitOps manifests created and pushed"
@@ -179,12 +207,14 @@ kind: Application
 metadata:
   name: social-app-clone
   namespace: argocd
+  labels:
+    app: social-app-clone
 spec:
   project: default
   source:
     repoURL: https://github.com/nshivakumar1/social-app-clone.git
     targetRevision: main
-    path: k8s-manifests
+    path: infrastructure/k8s-manifests
   destination:
     server: https://kubernetes.default.svc
     namespace: default
@@ -194,6 +224,12 @@ spec:
       selfHeal: true
     syncOptions:
     - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
 EOF
                                 """
                                 
@@ -203,11 +239,11 @@ EOF
                                 echo "✅ ArgoCD application configured and synced"
                             } else {
                                 echo "⚠️ kubectl not working - check EKS cluster and permissions"
-                                echo "📝 GitOps manifests are ready for manual ArgoCD setup"
+                                echo "📝 GitOps manifests are ready in infrastructure/k8s-manifests for manual ArgoCD setup"
                             }
                         } catch (Exception e) {
                             echo "⚠️ ArgoCD setup failed: ${e.getMessage()}"
-                            echo "📝 You can manually create the ArgoCD application using the generated manifests"
+                            echo "📝 You can manually create the ArgoCD application using the manifests in infrastructure/k8s-manifests"
                         }
                     }
                 }
@@ -222,10 +258,10 @@ EOF
                     
                     try {
                         sh "echo 'Testing ECS deployment...'"
-                        sh "curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/health || echo 'ECS health check failed'"
+                        sh "curl -f -s ${ECS_URL}/health || echo 'ECS health check failed'"
                         
                         sh "echo 'Testing main application...'"
-                        sh "curl -f -s http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/ | head -5 || echo 'ECS app test failed'"
+                        sh "curl -f -s ${ECS_URL}/ | head -5 || echo 'ECS app test failed'"
                         
                         echo "✅ Post-deployment tests completed"
                     } catch (Exception e) {
@@ -253,30 +289,17 @@ EOF
                 ========================
                 ✅ Build: ${IMAGE_TAG}
                 ✅ Commit: ${env.COMMIT_SHA}
+                ✅ Author: ${env.AUTHOR}
                 ✅ Image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-                ✅ ECS: http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com
+                ✅ ECS: ${ECS_URL}
                 ✅ Message: ${env.COMMIT_MESSAGE}
                 
                 🚀 Your social media app is live and updated!
-                📝 GitOps manifests are ready for ArgoCD
+                📝 GitOps manifests are in infrastructure/k8s-manifests for ArgoCD
                 """
                 
-                // Send success notification
-                withCredentials([aws(credentialsId: 'aws-credentials')]) {
-                    script {
-                        def slackWebhook = sh(
-                            script: 'aws ssm get-parameter --name "/social-app/slack/webhook-url" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
-                            returnStdout: true
-                        ).trim()
-                        
-                        if (slackWebhook != "not-configured") {
-                            def message = "🎉 Deployment Successful! Build #${BUILD_NUMBER} - ${env.COMMIT_MESSAGE} - http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com"
-                            sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"${message}\"}' '${slackWebhook}' || echo 'Slack notification failed'"
-                        } else {
-                            echo "💡 To enable Slack notifications, run: aws ssm put-parameter --name '/social-app/slack/webhook-url' --value 'YOUR_WEBHOOK_URL' --type 'SecureString'"
-                        }
-                    }
-                }
+                // CRITICAL: This calls the enhanced notification function
+                sendNotifications('success')
             }
         }
         
@@ -287,10 +310,158 @@ EOF
                 =====================
                 ❌ Build: ${BUILD_NUMBER}
                 ❌ Commit: ${env.COMMIT_SHA}
+                ❌ Author: ${env.AUTHOR}
+                ❌ Stage: ${env.STAGE_NAME}
                 ❌ Message: ${env.COMMIT_MESSAGE}
                 
                 📋 Check the build logs for details
                 """
+                
+                // CRITICAL: This calls the enhanced notification function
+                sendNotifications('failure')
+            }
+        }
+    }
+}
+
+// ENHANCED NOTIFICATION FUNCTION - MUST BE OUTSIDE PIPELINE BLOCK
+def sendNotifications(String status) {
+    withCredentials([aws(credentialsId: 'aws-credentials')]) {
+        script {
+            // Send Slack notification (working!)
+            try {
+                echo "🔔 Starting notification process for status: ${status}"
+                
+                def slackWebhook = sh(
+                    script: 'aws ssm get-parameter --name "/social-app/slack/webhook-url" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+                    returnStdout: true
+                ).trim()
+                
+                if (slackWebhook != "not-configured") {
+                    def message = status == 'success' ? 
+                        "🎉 Deployment Successful! Build #${BUILD_NUMBER} - ${env.COMMIT_MESSAGE} - ${ECS_URL}" :
+                        "🚨 Deployment Failed! Build #${BUILD_NUMBER} - ${env.COMMIT_MESSAGE} - ${BUILD_URL}console"
+                    
+                    sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"${message}\"}' '${slackWebhook}' || echo 'Slack notification failed'"
+                    echo "✅ Slack notification sent successfully"
+                } else {
+                    echo "💡 Slack not configured"
+                }
+            } catch (Exception e) {
+                echo "⚠️ Slack notification failed: ${e.getMessage()}"
+            }
+            
+            // Send Jira notification with enhanced debugging
+            try {
+                echo "🔍 Starting Jira notification process..."
+                
+                def jiraHost = 'learndevopswithkodekloud.atlassian.net'
+                
+                echo "📝 Fetching Jira username..."
+                def jiraUsername = sh(
+                    script: 'aws ssm get-parameter --name "/social-app/jira/username" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+                    returnStdout: true
+                ).trim()
+                echo "👤 Jira username: ${jiraUsername}"
+                
+                echo "🔑 Fetching Jira API token..."
+                def jiraToken = sh(
+                    script: 'aws ssm get-parameter --name "/social-app/jira/api-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+                    returnStdout: true
+                ).trim()
+                echo "🔑 Jira token status: ${jiraToken != 'not-configured' ? 'Found' : 'Not found'}"
+                
+                if (jiraUsername != "not-configured" && jiraToken != "not-configured") {
+                    echo "✅ Jira credentials found, creating issue..."
+                    
+                    def issueType = status == 'success' ? 'Task' : 'Bug'
+                    def priority = status == 'success' ? 'Medium' : 'High'
+                    def summary = status == 'success' ? 
+                        "✅ Deployment Successful - Social App Clone #${BUILD_NUMBER}" :
+                        "🚨 Deployment Failed - Social App Clone #${BUILD_NUMBER}"
+                    
+                    def description = status == 'success' ? 
+                        """Deployment completed successfully:
+• Build: #${BUILD_NUMBER}
+• Commit: ${env.COMMIT_SHA} by ${env.AUTHOR}
+• Image: ${ECR_REPOSITORY}:${IMAGE_TAG}
+• ECS URL: ${ECS_URL}
+• Message: ${env.COMMIT_MESSAGE}
+
+Deployed via Jenkins Pipeline: ${BUILD_URL}""" :
+                        """Deployment failed:
+• Build: #${BUILD_NUMBER}  
+• Commit: ${env.COMMIT_SHA} by ${env.AUTHOR}
+• Failed Stage: ${env.STAGE_NAME}
+• Message: ${env.COMMIT_MESSAGE}
+
+Check build logs: ${BUILD_URL}console"""
+                    
+                    // First, let's test Jira connectivity
+                    echo "🔍 Testing Jira API connectivity..."
+                    def auth = "${jiraUsername}:${jiraToken}".bytes.encodeBase64().toString()
+                    
+                    def connectivityTest = sh(
+                        script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Basic ${auth}' 'https://${jiraHost}/rest/api/2/myself'",
+                        returnStdout: true
+                    ).trim()
+                    echo "🔍 Jira API connectivity test result: HTTP ${connectivityTest}"
+                    
+                    if (connectivityTest == "200") {
+                        echo "✅ Jira authentication successful"
+                        
+                        // Create the issue
+                        def jiraPayload = [
+                            fields: [
+                                project: [key: "SAC"],
+                                summary: summary,
+                                description: description,
+                                issuetype: [name: issueType],
+                                priority: [name: priority],
+                                labels: ["jenkins", "deployment", "social-app-clone"]
+                            ]
+                        ]
+                        
+                        def payload = groovy.json.JsonBuilder(jiraPayload).toString()
+                        echo "📝 Creating Jira issue with payload: ${payload}"
+                        
+                        def jiraResponse = sh(
+                            script: """
+                            curl -X POST \\
+                              -H 'Authorization: Basic ${auth}' \\
+                              -H 'Content-Type: application/json' \\
+                              -d '${payload.replace("'", "\\'")}' \\
+                              -w 'HTTP_STATUS:%{http_code}' \\
+                              'https://${jiraHost}/rest/api/2/issue/'
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        echo "📋 Jira API response: ${jiraResponse}"
+                        
+                        if (jiraResponse.contains('"key"')) {
+                            echo "✅ Jira issue created successfully"
+                        } else {
+                            echo "⚠️ Jira issue creation may have failed - check response above"
+                        }
+                    } else if (connectivityTest == "401") {
+                        echo "❌ Jira authentication failed - check username and API token"
+                    } else if (connectivityTest == "403") {
+                        echo "❌ Jira access forbidden - check permissions"
+                    } else {
+                        echo "❌ Jira connectivity failed - HTTP ${connectivityTest}"
+                    }
+                } else {
+                    echo "💡 Jira not configured properly:"
+                    echo "   Username: ${jiraUsername == 'not-configured' ? '❌ Missing' : '✅ Found'}"
+                    echo "   API Token: ${jiraToken == 'not-configured' ? '❌ Missing' : '✅ Found'}"
+                    echo ""
+                    echo "📋 To fix, create these parameters in AWS Systems Manager:"
+                    echo "   1. /social-app/jira/username (String) = your-email@company.com"
+                    echo "   2. /social-app/jira/api-token (SecureString) = your-jira-api-token"
+                }
+            } catch (Exception e) {
+                echo "⚠️ Jira notification failed with exception: ${e.getMessage()}"
+                e.printStackTrace()
             }
         }
     }
