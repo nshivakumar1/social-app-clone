@@ -386,8 +386,40 @@ This project demonstrates enterprise-level DevOps practices:
 
 - 👀 Jira Integration to be fixed
 
-## 📞 Support
+## Quick Destroy all Terraform, Kubernetes and AWS Resources
 
+- Use Command:
+```bash
+#This command will destroy all resources created by terraform
+terraform destroy -auto-approve
+# To delete all Kubernetes Pods with all Cost charging resources
+
+# List everything first (review what you're about to delete)
+kubectl get all --all-namespaces
+
+# Delete ALL resources in ALL namespaces
+kubectl delete all --all --all-namespaces
+
+# Delete ALL persistent volumes
+kubectl delete pv --all
+
+# Delete ALL persistent volume claims
+kubectl delete pvc --all --all-namespaces
+
+# Delete ALL config maps
+kubectl delete configmaps --all --all-namespaces
+
+# Delete ALL secrets
+kubectl delete secrets --all --all-namespaces
+
+# Delete ALL service accounts (except system ones)
+kubectl delete serviceaccounts --all --all-namespaces
+
+# Delete ALL custom namespaces
+kubectl get namespaces --no-headers -o custom-columns=":metadata.name" | \
+grep -v -E "^(default|kube-system|kube-public|kube-node-lease)$" | \
+xargs -I {} kubectl delete namespace {}
+```
 ### Quick Links
 - **Live Application**: [Social App Clone](http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com) //On your AWS deployment the URL changes
 - **Jenkins Dashboard**: [Jenkins CI/CD](http://34.232.207.186:8080) //Jenkins URL changes based on the IP
