@@ -6,6 +6,26 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const winston = require('winston');
+require('winston-elasticsearch');
+
+// Configure Winston with Elasticsearch transport
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.Elasticsearch({
+      index: 'social-app-logs',
+      clientOpts: {
+        node: process.env.ELASTICSEARCH_URL || 'http://elasticsearch.monitoring.svc.cluster.local:9200'
+      }
+    })
+  ]
+});
 
 const app = express();
 const server = http.createServer(app);
