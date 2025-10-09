@@ -32,7 +32,7 @@ This project demonstrates a complete DevOps implementation for a modern social m
 - **GitOps Workflow** with ArgoCD and Kubernetes
 - **Comprehensive CI/CD Pipeline** using Jenkins
 - **Multi-environment Architecture** (ECS + EKS)
-- **Enterprise Notifications** (Slack ✅, Jira ⚠️)
+- **Enterprise Notifications** (Slack ✅, Jira ✅)
 
 ## 🏗️ Architecture
 
@@ -91,7 +91,7 @@ This project demonstrates a complete DevOps implementation for a modern social m
 - ☁️ **Cloud-Native** - AWS ECS Fargate deployment
 - 🎯 **GitOps** - ArgoCD for Kubernetes deployments
 - 📊 **Monitoring** - CloudWatch + ELK stack ready
-- 🔔 **Notifications** - Slack integration (Jira in progress)
+- 🔔 **Notifications** - Slack & Jira integration
 - 🛡️ **Security** - IAM roles, security groups, secrets management
 - 🔧 **IaC** - Complete infrastructure as Terraform code
 
@@ -113,7 +113,7 @@ This project demonstrates a complete DevOps implementation for a modern social m
 - **Container Registry**: AWS ECR
 - **Load Balancer**: Application Load Balancer
 - **Monitoring**: CloudWatch, ELK Stack
-- **Notifications**: Slack, Jira (in progress)
+- **Notifications**: Slack, Jira
 
 ### Development Tools
 - **Version Control**: Git, GitHub
@@ -207,15 +207,18 @@ terraform apply -auto-approve
 - **CloudWatch Log Groups** for centralized logging
 
 ### Environment Variables
-Configure these in AWS Systems Manager Parameter Store:
+Configure these in AWS Systems Manager Parameter Store (automatically created by Terraform):
 
 ```bash
 # Slack Integration
 /social-app/slack/webhook-url (SecureString)
 
-# Jira Integration (⚠️ In Progress)
+# Jira Integration (✅ Terraform Managed)
+/social-app/jira/url (String)
 /social-app/jira/username (String)
 /social-app/jira/api-token (SecureString)
+/social-app/jira/project-key (String)
+/social-app/jira/issue-type (String)
 ```
 
 ## 🔄 CI/CD Pipeline
@@ -275,25 +278,42 @@ curl http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/health
 
 ## ⚠️ Known Issues
 
-### Jira Integration (In Progress)
-**Issue**: HTTP 400 error when creating Jira tickets
+### Jira Integration - FIXED ✅
+**Previous Issue**: HTTP 400 error when creating Jira tickets due to invalid issue type "Task"
+
+**Solution Implemented**:
+- ✅ Jira configuration now managed via Terraform in `infrastructure/main.tf`
+- ✅ SSM Parameter Store integration for secure credential management
+- ✅ Configurable issue type (default: "Story", can be changed to "Bug", "Epic", or "Task" based on your Jira project)
+- ✅ All Jira settings centralized in Terraform variables
+
+**How to Configure**:
+1. Update Terraform variables in `infrastructure/terraform.tfvars`:
+   ```hcl
+   jira_url         = "https://yourcompany.atlassian.net"
+   jira_username    = "your-email@company.com"
+   jira_api_token   = "your-api-token"
+   jira_project_key = "SAC"
+   jira_issue_type  = "Story"  # Change to your valid issue type
+   ```
+
+2. Apply Terraform to create SSM parameters:
+   ```bash
+   cd infrastructure
+   terraform apply
+   ```
+
+3. Jenkins will automatically fetch credentials from SSM Parameter Store
+
+**To Find Valid Issue Types for Your Project**:
+```bash
+curl -u your-email@company.com:your-api-token \
+  https://yourcompany.atlassian.net/rest/api/3/issue/createmeta?projectKeys=SAC \
+  | jq '.projects[0].issuetypes[].name'
 ```
-{"errorMessages":[],"errors":{"issuetype":"Specify a valid issue type"}}
-```
+
 ### New to ELK, Still setting up Dashboards for Application Logging
 **Logs**: Created using dashboard of social-app-clone id and graphs with @timestamp
-
-**Current Status**: 
-- ✅ Authentication working (HTTP 200)
-- ✅ Project "SAC" exists
-- ❌ Issue type "Task" not valid for project in Jira
-
-**Next Steps**:
-1. Discover available issue types for SAC project
-2. Update Jenkins pipeline with correct issue type
-3. Test with "Story", "Bug", or "Epic" issue types
-
-**Workaround**: Pipeline continues without failing, Slack notifications working perfectly.
 
 ### Potential Improvements
 - [ ] Database integration (PostgreSQL/MongoDB)
@@ -380,11 +400,7 @@ This project demonstrates enterprise-level DevOps practices:
 - ✅ **Cloud-Native Architecture** on AWS
 - ✅ **Monitoring & Observability** setup
 - ✅ **Security Best Practices** implemented
-- ✅ **Automated Notifications** (Slack working)
-
-## ❌ Needs Fixing:
-
-- 👀 Jira Integration to be fixed
+- ✅ **Automated Notifications** (Slack & Jira integration)
 
 ## Quick Destroy all Terraform, Kubernetes and AWS Resources
 

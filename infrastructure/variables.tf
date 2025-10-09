@@ -33,3 +33,35 @@ variable "aws_account_id" {
   type        = string
   default     = ""
 }
+
+# Jira Integration Variables
+variable "jira_url" {
+  description = "Jira instance URL (e.g., https://yourcompany.atlassian.net)"
+  type        = string
+  default     = ""
+}
+
+variable "jira_username" {
+  description = "Jira username/email for API authentication"
+  type        = string
+  default     = ""
+}
+
+variable "jira_api_token" {
+  description = "Jira API token for authentication"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "jira_project_key" {
+  description = "Jira project key (e.g., SAC)"
+  type        = string
+  default     = "SAC"
+}
+
+variable "jira_issue_type" {
+  description = "Jira issue type (e.g., Story, Bug, Epic, Task)"
+  type        = string
+  default     = "Story"
+}

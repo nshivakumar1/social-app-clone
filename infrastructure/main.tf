@@ -418,3 +418,59 @@ resource "aws_eip" "jenkins" {
   instance = aws_instance.jenkins.id
   domain   = "vpc"
 }
+
+# Jira Integration - SSM Parameters
+resource "aws_ssm_parameter" "jira_url" {
+  name        = "/social-app/jira/url"
+  description = "Jira instance URL"
+  type        = "String"
+  value       = var.jira_url
+
+  tags = {
+    Name = "${var.project_name}-jira-url"
+  }
+}
+
+resource "aws_ssm_parameter" "jira_username" {
+  name        = "/social-app/jira/username"
+  description = "Jira username/email"
+  type        = "String"
+  value       = var.jira_username
+
+  tags = {
+    Name = "${var.project_name}-jira-username"
+  }
+}
+
+resource "aws_ssm_parameter" "jira_api_token" {
+  name        = "/social-app/jira/api-token"
+  description = "Jira API token"
+  type        = "SecureString"
+  value       = var.jira_api_token
+
+  tags = {
+    Name = "${var.project_name}-jira-api-token"
+  }
+}
+
+resource "aws_ssm_parameter" "jira_project_key" {
+  name        = "/social-app/jira/project-key"
+  description = "Jira project key (e.g., SAC)"
+  type        = "String"
+  value       = var.jira_project_key
+
+  tags = {
+    Name = "${var.project_name}-jira-project-key"
+  }
+}
+
+resource "aws_ssm_parameter" "jira_issue_type" {
+  name        = "/social-app/jira/issue-type"
+  description = "Jira issue type (e.g., Story, Bug, Epic)"
+  type        = "String"
+  value       = var.jira_issue_type
+
+  tags = {
+    Name = "${var.project_name}-jira-issue-type"
+  }
+}

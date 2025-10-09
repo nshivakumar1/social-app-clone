@@ -31,3 +31,15 @@ output "application_url" {
 output "jenkins_url" {
   value = "http://${aws_eip.jenkins.public_ip}:8080"
 }
+
+# Jira Integration Outputs
+output "jira_ssm_parameters" {
+  description = "Jira SSM parameter paths for Jenkins"
+  value = {
+    url          = aws_ssm_parameter.jira_url.name
+    username     = aws_ssm_parameter.jira_username.name
+    api_token    = aws_ssm_parameter.jira_api_token.name
+    project_key  = aws_ssm_parameter.jira_project_key.name
+    issue_type   = aws_ssm_parameter.jira_issue_type.name
+  }
+}
