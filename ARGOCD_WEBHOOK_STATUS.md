@@ -98,7 +98,7 @@ infrastructure/k8s-manifests/
 
 ```bash
 # Configure kubectl
-aws eks update-kubeconfig --region us-east-1 --name social-app-eks
+aws eks update-kubeconfig --region us-east-1 --name social-app-clone-eks
 
 # Check if ArgoCD is installed
 kubectl get ns argocd

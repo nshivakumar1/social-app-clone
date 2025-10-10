@@ -13,7 +13,7 @@ NC='\033[0m'
 # Check if kubectl is configured
 if ! kubectl get ns argocd &>/dev/null; then
     echo -e "${RED}❌ ArgoCD namespace not found or kubectl not configured${NC}"
-    echo "Run: aws eks update-kubeconfig --region us-east-1 --name social-app-eks"
+    echo "Run: aws eks update-kubeconfig --region us-east-1 --name social-app-clone-eks"
     exit 1
 fi
 
