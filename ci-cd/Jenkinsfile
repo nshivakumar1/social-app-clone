@@ -54,7 +54,12 @@ pipeline {
         stage('📤 Push to ECR') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         sh "echo '🔐 Logging into ECR...'"
                         sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
 
@@ -76,7 +81,12 @@ pipeline {
         stage('🚀 Deploy to ECS') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         sh "echo '🚀 Deploying to ECS Fargate...'"
                         sh "aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}"
                         sh "echo '⏳ Waiting for ECS deployment to stabilize...'"
@@ -178,7 +188,12 @@ spec:
         stage('🔄 Setup ArgoCD Application') {
             steps {
                 script {
-                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         try {
                             sh "echo '🔄 Configuring EKS kubeconfig...'"
                             sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER} || echo 'EKS cluster not found or no access'"
@@ -312,7 +327,12 @@ EOF
 
 // ENHANCED NOTIFICATION FUNCTION - OUTSIDE PIPELINE BLOCK
 def sendNotifications(String status) {
-    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+    withCredentials([[
+        $class: 'AmazonWebServicesCredentialsBinding',
+        credentialsId: 'aws-credentials',
+        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+    ]]) {
         script {
             echo "🔔 Starting notification process for status: ${status}"
             
