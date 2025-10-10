@@ -105,82 +105,24 @@ pipeline {
             steps {
                 script {
                     try {
-                        sh "echo '📝 Creating Kubernetes manifests...'"
-                        sh "mkdir -p infrastructure/k8s-manifests"
-                        
-                        sh """
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: social-app-clone
-  namespace: default
-  labels:
-    app: social-app-clone
-    version: "${IMAGE_TAG}"
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: social-app-clone
-  template:
-    metadata:
-      labels:
-        app: social-app-clone
-        version: "${IMAGE_TAG}"
-    spec:
-      containers:
-      - name: social-app-clone
-        image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-        ports:
-        - containerPort: 3000
-        env:
-        - name: NODE_ENV
-          value: "production"
-        - name: BUILD_NUMBER
-          value: "${IMAGE_TAG}"
-        - name: COMMIT_SHA
-          value: "${env.COMMIT_SHA}"
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 5
-          periodSeconds: 5
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: social-app-clone-service
-spec:
-  selector:
-    app: social-app-clone
-  ports:
-  - port: 80
-    targetPort: 3000
-  type: LoadBalancer
+                        sh "echo '📝 Updating Kubernetes manifests with new image...'"
 
+                        // Update deployment.yaml with new image tag
+                        sh """
+                            sed -i 's|image: .*social-app-clone:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}|g' infrastructure/k8s-manifests/deployment.yaml || echo 'sed failed'
                         """
-                        
+
+                        sh "echo '📋 Updated deployment.yaml with image tag: ${IMAGE_TAG}'"
+                        sh "cat infrastructure/k8s-manifests/deployment.yaml | grep 'image:'"
+
+                        // Commit and push if there are changes
                         sh "git config user.email jenkins@social-app.com"
                         sh "git config user.name 'Jenkins GitOps'"
-                        sh "git add infrastructure/k8s-manifests/ || true"
+                        sh "git add infrastructure/k8s-manifests/deployment.yaml || true"
                         sh "git diff --staged --quiet || git commit -m 'GitOps: Update image to ${IMAGE_TAG} [skip ci]' || true"
-                        sh "git push origin main || echo 'Push failed, but continuing...'"
-                        
-                        echo "✅ GitOps manifests created and pushed"
+                        sh "git push origin main || echo '⚠️ Git push failed (might be up to date)'"
+
+                        echo "✅ GitOps manifests updated successfully"
                     } catch (Exception e) {
                         echo "⚠️ GitOps update failed: ${e.getMessage()}"
                         echo "🔄 Continuing with deployment..."

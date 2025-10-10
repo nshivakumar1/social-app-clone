@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-app-clone-service
+  namespace: default
+  labels:
+    app: social-app-clone
+spec:
+  type: LoadBalancer
+  selector:
+    app: social-app-clone
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+    name: http
