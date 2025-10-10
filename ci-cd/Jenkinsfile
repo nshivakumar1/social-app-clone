@@ -1,6 +1,10 @@
 pipeline {
     agent any
-    
+
+    triggers {
+        githubPush()  // Trigger builds on GitHub push events
+    }
+
     environment {
         ECR_REGISTRY = '297997106614.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPOSITORY = 'social-app-clone'
@@ -11,7 +15,7 @@ pipeline {
         IMAGE_TAG = "${BUILD_NUMBER}"
         ECS_URL = 'http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com'
     }
-    
+
     stages {
         stage('🔍 Checkout') {
             steps {
