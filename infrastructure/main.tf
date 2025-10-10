@@ -133,7 +133,8 @@ resource "aws_security_group" "ecs" {
 
 # ECR Repository
 resource "aws_ecr_repository" "app" {
-  name = var.project_name
+  name         = var.project_name
+  force_delete = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -403,6 +404,7 @@ resource "aws_instance" "jenkins" {
   iam_instance_profile  = aws_iam_instance_profile.jenkins_profile.name
 
   user_data = base64encode(file("jenkins-userdata-robust.sh"))
+  user_data_replace_on_change = true
 
   root_block_device {
     volume_size = 20
@@ -436,6 +438,7 @@ resource "aws_ssm_parameter" "jira_username" {
   description = "Jira username/email"
   type        = "String"
   value       = var.jira_username
+  overwrite   = true
 
   tags = {
     Name = "${var.project_name}-jira-username"
@@ -447,6 +450,7 @@ resource "aws_ssm_parameter" "jira_api_token" {
   description = "Jira API token"
   type        = "SecureString"
   value       = var.jira_api_token
+  overwrite   = true
 
   tags = {
     Name = "${var.project_name}-jira-api-token"
@@ -458,6 +462,7 @@ resource "aws_ssm_parameter" "jira_project_key" {
   description = "Jira project key (e.g., SAC)"
   type        = "String"
   value       = var.jira_project_key
+  overwrite   = true
 
   tags = {
     Name = "${var.project_name}-jira-project-key"
@@ -469,8 +474,151 @@ resource "aws_ssm_parameter" "jira_issue_type" {
   description = "Jira issue type (e.g., Story, Bug, Epic)"
   type        = "String"
   value       = var.jira_issue_type
+  overwrite   = true
 
   tags = {
     Name = "${var.project_name}-jira-issue-type"
   }
+}
+
+# ============================================================================
+# EKS CLUSTER CONFIGURATION
+# ============================================================================
+
+# IAM Role for EKS Cluster
+resource "aws_iam_role" "eks_cluster_role" {
+  name = "${var.project_name}-eks-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "eks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-eks-cluster-role"
+  }
+}
+
+# Attach EKS Cluster Policy
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.eks_cluster_role.name
+}
+
+# IAM Role for EKS Node Group
+resource "aws_iam_role" "eks_node_role" {
+  name = "${var.project_name}-eks-node-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name}-eks-node-role"
+  }
+}
+
+# Attach required policies to Node Group Role
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.eks_node_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.eks_node_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_container_registry_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.eks_node_role.name
+}
+
+# EKS Cluster
+resource "aws_eks_cluster" "main" {
+  name     = "${var.project_name}-eks"
+  role_arn = aws_iam_role.eks_cluster_role.arn
+  version  = "1.28"
+
+  vpc_config {
+    subnet_ids              = aws_subnet.public[*].id
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_cluster_policy,
+  ]
+
+  tags = {
+    Name = "${var.project_name}-eks-cluster"
+  }
+}
+
+# EKS Node Group
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "${var.project_name}-node-group"
+  node_role_arn   = aws_iam_role.eks_node_role.arn
+  subnet_ids      = aws_subnet.public[*].id
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 1
+  }
+
+  instance_types = ["t3.medium"]
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_worker_node_policy,
+    aws_iam_role_policy_attachment.eks_cni_policy,
+    aws_iam_role_policy_attachment.eks_container_registry_policy,
+  ]
+
+  tags = {
+    Name = "${var.project_name}-node-group"
+  }
+}
+
+# EKS Add-on: CoreDNS
+resource "aws_eks_addon" "coredns" {
+  cluster_name  = aws_eks_cluster.main.name
+  addon_name    = "coredns"
+  addon_version = "v1.10.1-eksbuild.6"
+
+  depends_on = [
+    aws_eks_node_group.main
+  ]
+}
+
+# EKS Add-on: kube-proxy
+resource "aws_eks_addon" "kube_proxy" {
+  cluster_name  = aws_eks_cluster.main.name
+  addon_name    = "kube-proxy"
+  addon_version = "v1.28.4-eksbuild.1"
+}
+
+# EKS Add-on: VPC CNI
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name  = aws_eks_cluster.main.name
+  addon_name    = "vpc-cni"
+  addon_version = "v1.15.5-eksbuild.1"
 }

@@ -1,4 +1,39 @@
+# Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
+*.tfstate.backup
+terraform.tfvars
+terraform.tfvars.json
+
+# Backups
+*.bak
+*.backup
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+/tmp/
+
+# Secrets
+*.pem
+*.key
+.env
+.env.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

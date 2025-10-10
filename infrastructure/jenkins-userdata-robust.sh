@@ -35,9 +35,17 @@ curl -o kubectl "https://amazon-eks.s3.us-west-2.amazonaws.com/1.27.1/2023-04-19
 chmod +x ./kubectl
 mv ./kubectl /usr/local/bin
 
-# Install Node.js
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs
+# Install Node.js (use version compatible with Amazon Linux 2)
+curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
+yum install -y nodejs || amazon-linux-extras install -y nodejs18
+
+# Add Jenkins repository and install Jenkins
+wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo || echo "Failed to download Jenkins repo"
+rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key || echo "Failed to import Jenkins GPG key"
+yum install -y jenkins --nogpgcheck || echo "Failed to install Jenkins"
+
+# Add jenkins user to docker group
+usermod -a -G docker jenkins
 
 # Configure Jenkins
 mkdir -p /var/lib/jenkins
