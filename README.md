@@ -2,7 +2,7 @@
 
 A production-ready social media application with comprehensive CI/CD pipeline, containerized deployment, and enterprise-grade DevOps practices featuring automated Slack and Jira notifications.
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](http://34.232.207.186:8080)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](http://100.28.67.190:8080)
 [![Application](https://img.shields.io/badge/app-live-blue)](http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node.js-18.x-green)](https://nodejs.org/)
@@ -180,7 +180,7 @@ terraform apply
 
 ### 4. Access Applications
 - **Social App**: http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com
-- **Jenkins**: http://34.232.207.186:8080
+- **Jenkins**: http://100.28.67.190:8080
 - **Health Check**: http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com/health
 
 ## 🏗️ Infrastructure Setup
@@ -482,8 +482,8 @@ kubectl get namespaces --no-headers -o custom-columns=":metadata.name" | \
 - **📱 Live Application**: [Social App Clone](http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com)
   *(URL will be different for your deployment)*
 
-- **🔧 Jenkins Dashboard**: [Jenkins CI/CD](http://34.232.207.186:8080)
-  *(URL changes based on your EC2 instance IP)*
+- **🔧 Jenkins Dashboard**: [Jenkins CI/CD](http://100.28.67.190:8080)
+  *(URL changes based on your EC2 Elastic IP)*
 
 - **💻 GitHub Repository**: [Source Code](https://github.com/nshivakumar1/social-app-clone)
 

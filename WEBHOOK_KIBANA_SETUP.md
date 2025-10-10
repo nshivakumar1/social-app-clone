@@ -14,7 +14,7 @@
 
 3. **Configure Webhook**:
    ```
-   Payload URL: http://34.232.207.186:8080/github-webhook/
+   Payload URL: http://100.28.67.190:8080/github-webhook/
    Content type: application/json
    Secret: (leave blank or add a secret token)
    SSL verification: Disable SSL verification (since using HTTP)
@@ -36,7 +36,7 @@ SSH into your Jenkins server and verify:
 
 ```bash
 # SSH to Jenkins EC2
-ssh -i your-key.pem ec2-user@34.232.207.186
+ssh -i your-key.pem ec2-user@100.28.67.190
 
 # Check if GitHub plugin is installed
 sudo cat /var/lib/jenkins/plugins/github/META-INF/MANIFEST.MF | grep Version
@@ -49,7 +49,7 @@ If not installed, install via Jenkins UI:
 
 ### Step 3: Configure Jenkins Project for Webhooks
 
-1. Go to Jenkins: http://34.232.207.186:8080
+1. Go to Jenkins: http://100.28.67.190:8080
 2. Click on **social-app-clone-pipeline** job
 3. Click **Configure**
 4. Scroll to **Build Triggers** section
