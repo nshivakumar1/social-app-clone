@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -38,6 +42,14 @@ resource "aws_internet_gateway" "main" {
   tags = {
     Name = "${var.project_name}-igw"
   }
+
+  lifecycle {
+    create_before_destroy = false
+  }
+
+  depends_on = [
+    aws_vpc.main
+  ]
 }
 
 # Public Subnets
@@ -52,6 +64,14 @@ resource "aws_subnet" "public" {
   tags = {
     Name = "${var.project_name}-public-${count.index + 1}"
   }
+
+  lifecycle {
+    create_before_destroy = false
+  }
+
+  depends_on = [
+    aws_internet_gateway.main
+  ]
 }
 
 # Route Table
@@ -253,8 +273,14 @@ resource "aws_alb" "main" {
   subnets         = aws_subnet.public[*].id
   security_groups = [aws_security_group.alb.id]
 
+  enable_deletion_protection = false
+
   tags = {
     Name = var.project_name
+  }
+
+  lifecycle {
+    create_before_destroy = false
   }
 }
 
@@ -264,6 +290,8 @@ resource "aws_alb_target_group" "app" {
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
+
+  deregistration_delay = 30
 
   health_check {
     healthy_threshold   = "3"
@@ -277,6 +305,10 @@ resource "aws_alb_target_group" "app" {
 
   tags = {
     Name = var.project_name
+  }
+
+  lifecycle {
+    create_before_destroy = false
   }
 }
 
@@ -300,6 +332,11 @@ resource "aws_ecs_service" "main" {
   desired_count   = var.app_count
   launch_type     = "FARGATE"
 
+  # Enable faster draining during destroy
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 50
+  health_check_grace_period_seconds  = 60
+
   network_configuration {
     security_groups  = [aws_security_group.ecs.id]
     subnets          = aws_subnet.public[*].id
@@ -313,6 +350,11 @@ resource "aws_ecs_service" "main" {
   }
 
   depends_on = [aws_alb_listener.front_end]
+
+  lifecycle {
+    create_before_destroy = false
+    ignore_changes        = [desired_count]
+  }
 
   tags = {
     Name = var.project_name
@@ -419,6 +461,15 @@ resource "aws_instance" "jenkins" {
 resource "aws_eip" "jenkins" {
   instance = aws_instance.jenkins.id
   domain   = "vpc"
+
+  lifecycle {
+    create_before_destroy = false
+  }
+
+  depends_on = [
+    aws_internet_gateway.main,
+    aws_instance.jenkins
+  ]
 }
 
 # Jira Integration - SSM Parameters
@@ -586,6 +637,12 @@ resource "aws_eks_node_group" "main" {
   }
 
   instance_types = ["t3.medium"]
+
+  # Force update of desired size to 0 on destroy
+  lifecycle {
+    create_before_destroy = false
+    ignore_changes        = [scaling_config[0].desired_size]
+  }
 
   depends_on = [
     aws_iam_role_policy_attachment.eks_worker_node_policy,

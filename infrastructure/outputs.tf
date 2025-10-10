@@ -65,3 +65,49 @@ output "configure_kubectl" {
   description = "Command to configure kubectl"
   value       = "aws eks update-kubeconfig --region us-east-1 --name ${aws_eks_cluster.main.name}"
 }
+
+# Additional outputs for destroy scripts
+output "ecs_cluster_arn" {
+  description = "ARN of the ECS cluster"
+  value       = aws_ecs_cluster.main.arn
+}
+
+output "alb_arn" {
+  description = "ARN of the Application Load Balancer"
+  value       = aws_alb.main.arn
+}
+
+output "target_group_arn" {
+  description = "ARN of the ALB target group"
+  value       = aws_alb_target_group.app.arn
+}
+
+output "eks_node_group_name" {
+  description = "Name of the EKS node group"
+  value       = aws_eks_node_group.main.node_group_name
+}
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = aws_vpc.main.id
+}
+
+output "internet_gateway_id" {
+  description = "ID of the Internet Gateway"
+  value       = aws_internet_gateway.main.id
+}
+
+output "subnet_ids" {
+  description = "IDs of the public subnets"
+  value       = aws_subnet.public[*].id
+}
+
+output "jenkins_public_ip" {
+  description = "Public IP of the Jenkins server"
+  value       = aws_eip.jenkins.public_ip
+}
+
+output "jenkins_instance_id" {
+  description = "ID of the Jenkins EC2 instance"
+  value       = aws_instance.jenkins.id
+}
