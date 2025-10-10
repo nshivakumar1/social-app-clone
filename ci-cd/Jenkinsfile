@@ -54,19 +54,19 @@ pipeline {
         stage('📤 Push to ECR') {
             steps {
                 script {
-                    withCredentials([aws(credentialsId: 'aws-credentials')]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         sh "echo '🔐 Logging into ECR...'"
                         sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
-                        
+
                         sh "echo '📤 Pushing images to ECR...'"
                         sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
                         sh "docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
                         sh "docker tag ${ECR_REPOSITORY}:${env.COMMIT_SHA} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
-                        
+
                         sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
                         sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
                         sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
-                        
+
                         sh "echo '✅ Images pushed successfully'"
                     }
                 }
@@ -76,7 +76,7 @@ pipeline {
         stage('🚀 Deploy to ECS') {
             steps {
                 script {
-                    withCredentials([aws(credentialsId: 'aws-credentials')]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         sh "echo '🚀 Deploying to ECS Fargate...'"
                         sh "aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}"
                         sh "echo '⏳ Waiting for ECS deployment to stabilize...'"
@@ -178,7 +178,7 @@ spec:
         stage('🔄 Setup ArgoCD Application') {
             steps {
                 script {
-                    withCredentials([aws(credentialsId: 'aws-credentials')]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         try {
                             sh "echo '🔄 Configuring EKS kubeconfig...'"
                             sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER} || echo 'EKS cluster not found or no access'"
@@ -312,7 +312,7 @@ EOF
 
 // ENHANCED NOTIFICATION FUNCTION - OUTSIDE PIPELINE BLOCK
 def sendNotifications(String status) {
-    withCredentials([aws(credentialsId: 'aws-credentials')]) {
+    withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
         script {
             echo "🔔 Starting notification process for status: ${status}"
             
@@ -342,7 +342,7 @@ def sendNotifications(String status) {
             try {
                 echo "🔍 Starting Jira notification process..."
                 
-                def jiraHost = 'learndevopswithkodekloud.atlassian.net'
+                def jiraHost = 'infinityloop.atlassian.net'
                 
                 echo "📝 Fetching Jira username from AWS Systems Manager..."
                 def jiraUsername = sh(
@@ -361,7 +361,7 @@ def sendNotifications(String status) {
                 if (jiraUsername != "not-configured" && jiraToken != "not-configured") {
                     echo "✅ Jira credentials found, proceeding with issue creation..."
                     
-                    def issueType = status == 'success' ? 'Story' : 'Bug'  // Changed from 'Task' to 'Story'
+                    def issueType = 'Task'  // Available types: Task, Epic, Subtask
                     def priority = status == 'success' ? 'Medium' : 'High'
                     def summary = status == 'success' ? 
                         "✅ Deployment Successful - Social App Clone #${BUILD_NUMBER}" :
@@ -384,7 +384,7 @@ def sendNotifications(String status) {
                         echo "✅ Jira authentication successful, creating issue..."
                         
                         // Try multiple issue types until one works
-                        def issueTypes = ['Story', 'Task', 'Bug', 'Epic', 'Improvement']
+                        def issueTypes = ['Task', 'Epic']  // Available types for SAD project
                         def issueCreated = false
                         
                         for (String currentIssueType : issueTypes) {
@@ -397,7 +397,7 @@ def sendNotifications(String status) {
                                 curl -X POST \\
                                   -u '${jiraUsername}:${jiraToken}' \\
                                   -H 'Content-Type: application/json' \\
-                                  -d '{"fields":{"project":{"key":"SAC"},"summary":"${summary}","description":"${description}","issuetype":{"name":"${currentIssueType}"}}}' \\
+                                  -d '{"fields":{"project":{"key":"SAD"},"summary":"${summary}","description":"${description}","issuetype":{"name":"${currentIssueType}"}}}' \\
                                   -w 'HTTP_STATUS:%{http_code}' \\
                                   'https://${jiraHost}/rest/api/2/issue/' 2>/dev/null
                                 """,
