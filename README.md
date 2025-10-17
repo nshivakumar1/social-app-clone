@@ -123,10 +123,13 @@ This project demonstrates a complete DevOps implementation for a modern social m
 - **Notifications**: Slack ✅ + Jira ✅ (automated build notifications)
 - **Secrets Management**: AWS Systems Manager Parameter Store
 
-### Development Tools
+### Development & Quality Tools
 - **Version Control**: Git, GitHub
-- **Code Quality**: ESLint (ready)
-- **Testing**: Jest (ready)
+- **Configuration Management**: Ansible (playbooks + dynamic inventory)
+- **Code Quality**: ESLint, SonarQube, npm audit
+- **Testing**: Jest with coverage reporting
+- **Security Scanning**: CodeQL, Trivy, dependency review
+- **CI/CD**: Jenkins + GitHub Actions
 - **Documentation**: Markdown
 
 ### 📸 Screenshots
@@ -234,13 +237,14 @@ Configure these in AWS Systems Manager Parameter Store (automatically created by
 ### Jenkins Pipeline Stages (Fully Automated ✅)
 
 1. **🔍 Checkout** - Git repository checkout with commit details and metadata
-2. **🧪 Test** - Automated test execution (extensible test framework ready)
-3. **🐋 Build Docker Image** - Multi-platform Docker build (linux/amd64)
-4. **📤 Push to ECR** - Secure AWS ECR authentication and image push
-5. **🚀 Deploy to ECS** - AWS ECS Fargate service update with health checks
-6. **📝 Update GitOps** - Auto-generate and commit Kubernetes manifests
-7. **🔄 ArgoCD Sync** - Kubernetes deployment automation (optional)
-8. **🧪 Post-Deployment Tests** - Health endpoint validation and smoke tests
+2. **🧪 Test** - Automated test execution with Jest and coverage reporting
+3. **📊 Code Quality Analysis** - ESLint linting, npm audit, SonarQube scanning
+4. **🐋 Build Docker Image** - Multi-platform Docker build (linux/amd64)
+5. **📤 Push to ECR** - Secure AWS ECR authentication and image push
+6. **🚀 Deploy to ECS** - AWS ECS Fargate service update with health checks
+7. **📝 Update GitOps** - Auto-generate and commit Kubernetes manifests
+8. **🔄 ArgoCD Sync** - Kubernetes deployment automation (optional)
+9. **🧪 Post-Deployment Tests** - Health endpoint validation and smoke tests
 
 ### Pipeline Features
 - ✅ **Automatic Triggering** - Webhook-based CI/CD on git push to main
@@ -330,13 +334,18 @@ Real-time build notifications sent to your Slack workspace.
    - ✅ Successful deployments (with app URL)
    - ❌ Failed deployments (with console logs link)
 
-### Potential Improvements
+### Recent Improvements ✅
+- [x] **Ansible Integration** - Complete configuration management and deployment automation
+- [x] **Code Quality Scanning** - ESLint, SonarQube, npm audit integration
+- [x] **Security Scanning** - CodeQL, Trivy, dependency review in CI/CD
+- [x] **GitHub Actions** - Automated code quality and security workflows
+
+### Potential Future Improvements
 - [ ] Database integration (PostgreSQL/MongoDB)
 - [ ] Redis for session management
 - [ ] HTTPS/SSL certificate setup
 - [ ] Automated backup strategies
-- [ ] Advanced security scanning
-- [ ] Performance testing integration
+- [ ] Performance testing integration (JMeter/k6)
 - [ ] Multi-region deployment
 
 ## 🛡️ Security
@@ -357,7 +366,19 @@ Real-time build notifications sent to your Slack workspace.
 - Encrypted secrets storage
 - Audit logging enabled
 
-## 📚 Additional Setup Guides
+## 📚 Additional Documentation
+
+### Quick Reference
+- **[⚡ Quick Reference](QUICK_REFERENCE.md)** - Common commands and quick setup guide
+
+### Comprehensive Guides
+- **[Ansible Installation](ANSIBLE_INSTALLATION.md)** - How to install Ansible on your machine and Jenkins
+- **[Ansible Guide](ANSIBLE_GUIDE.md)** - Complete Ansible configuration management and deployment automation
+- **[Code Quality Guide](CODE_QUALITY_GUIDE.md)** - Code quality scanning, security analysis, and best practices
+- **[Improvements Summary](IMPROVEMENTS_SUMMARY.md)** - Recent enhancements and new features
+- **[Terraform Destroy Guide](TERRAFORM_DESTROY_GUIDE.md)** - Safe infrastructure cleanup procedures
+- **[CloudWatch to ELK Guide](CLOUDWATCH_TO_ELK_GUIDE.md)** - Log aggregation and monitoring setup
+- **[Secret Removal Guide](FIX_GITHUB_SECRET_SCANNING.md)** - Git history cleanup and secret management
 
 ### Creating a Free Jira Account
 1. Visit [Atlassian Jira Free Signup](https://www.atlassian.com/try/cloud/signup?bundle=jira-software&edition=free)

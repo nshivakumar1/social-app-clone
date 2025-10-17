@@ -1,0 +1,37 @@
+---
+# AWS EC2 Dynamic Inventory Configuration
+# Requires: boto3, botocore
+# AWS credentials should be configured via environment variables or ~/.aws/credentials
+
+plugin: aws_ec2
+
+regions:
+  - us-east-1
+
+filters:
+  # Filter instances by tags
+  tag:Project: social-app-clone
+  instance-state-name: running
+
+keyed_groups:
+  # Group by instance tags
+  - key: tags.Environment
+    prefix: env
+  - key: tags.Role
+    prefix: role
+  - key: tags.Name
+    prefix: name
+
+hostnames:
+  # Use public IP address as hostname
+  - ip-address
+
+compose:
+  ansible_host: public_ip_address
+  ansible_user: "'ec2-user'"
+
+# Cache settings
+cache: yes
+cache_plugin: jsonfile
+cache_timeout: 7200
+cache_connection: /tmp/aws_ec2_inventory

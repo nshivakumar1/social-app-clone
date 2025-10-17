@@ -1,0 +1,112 @@
+---
+# Playbook for setting up and configuring Jenkins CI/CD server
+
+- name: Setup and Configure Jenkins
+  hosts: jenkins
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Update system packages
+      yum:
+        name: '*'
+        state: latest
+        update_cache: yes
+      when: ansible_os_family == "RedHat"
+
+    - name: Install required dependencies
+      yum:
+        name:
+          - java-11-openjdk
+          - java-11-openjdk-devel
+          - git
+          - wget
+          - curl
+          - unzip
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Add Jenkins repository
+      get_url:
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        dest: /etc/yum.repos.d/jenkins.repo
+      when: ansible_os_family == "RedHat"
+
+    - name: Import Jenkins GPG key
+      rpm_key:
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Ensure Jenkins is started and enabled
+      systemd:
+        name: jenkins
+        state: started
+        enabled: yes
+
+    - name: Wait for Jenkins to start
+      wait_for:
+        port: "{{ jenkins_http_port }}"
+        delay: 10
+        timeout: 300
+
+    - name: Get Jenkins initial admin password
+      slurp:
+        src: "{{ jenkins_home }}/secrets/initialAdminPassword"
+      register: jenkins_initial_password
+      ignore_errors: yes
+
+    - name: Display initial admin password
+      debug:
+        msg: "Jenkins Initial Password: {{ jenkins_initial_password.content | b64decode }}"
+      when: jenkins_initial_password is succeeded
+
+    - name: Install Docker
+      shell: |
+        yum install -y docker
+        systemctl start docker
+        systemctl enable docker
+        usermod -aG docker jenkins
+      args:
+        creates: /usr/bin/docker
+
+    - name: Install AWS CLI v2
+      shell: |
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip -o awscliv2.zip
+        ./aws/install --update
+        rm -rf aws awscliv2.zip
+      args:
+        creates: /usr/local/bin/aws
+
+    - name: Install Docker Compose
+      get_url:
+        url: "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Create Jenkins job directory
+      file:
+        path: "{{ jenkins_home }}/jobs"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    - name: Restart Jenkins to apply changes
+      systemd:
+        name: jenkins
+        state: restarted
+
+    - name: Display Jenkins access information
+      debug:
+        msg: |
+          Jenkins is now running!
+          URL: {{ jenkins_url }}
+          Initial setup complete. Please complete the setup wizard in your browser.

@@ -1,0 +1,20 @@
+---
+# Ansible Galaxy requirements
+# Install with: ansible-galaxy install -r requirements.yml
+
+collections:
+  - name: amazon.aws
+    version: ">=6.0.0"
+  - name: community.aws
+    version: ">=6.0.0"
+  - name: community.docker
+    version: ">=3.4.0"
+  - name: community.general
+    version: ">=7.0.0"
+
+roles:
+  # Add custom roles from Ansible Galaxy if needed
+  # - name: geerlingguy.jenkins
+  #   version: "4.8.0"
+  # - name: geerlingguy.docker
+  #   version: "6.1.0"

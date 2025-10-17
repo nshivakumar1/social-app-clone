@@ -39,6 +39,51 @@ mv ./kubectl /usr/local/bin
 curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
 yum install -y nodejs || amazon-linux-extras install -y nodejs18
 
+# Install Python3 and pip (required for Ansible)
+yum install -y python3 python3-pip
+
+# Install Ansible and required Python packages
+pip3 install --upgrade pip
+pip3 install ansible boto3 botocore
+
+# Install Ansible Galaxy collections for AWS
+su - jenkins -c "ansible-galaxy collection install amazon.aws community.aws community.docker --force" || echo "Will install collections later"
+
+# Create Ansible directory structure for Jenkins
+mkdir -p /var/lib/jenkins/ansible/{inventory,playbooks,roles}
+chown -R jenkins:jenkins /var/lib/jenkins/ansible
+
+# Configure Ansible for Jenkins user
+cat > /etc/ansible/ansible.cfg << 'EOF'
+[defaults]
+host_key_checking = False
+retry_files_enabled = False
+gathering = smart
+fact_caching = jsonfile
+fact_caching_connection = /tmp/ansible_facts
+fact_caching_timeout = 3600
+log_path = /var/log/ansible.log
+remote_user = ec2-user
+become = True
+become_method = sudo
+forks = 10
+stdout_callback = yaml
+
+[inventory]
+enable_plugins = ini, yaml, aws_ec2
+
+[ssh_connection]
+ssh_args = -o ControlMaster=auto -o ControlPersist=60s -o StrictHostKeyChecking=no
+pipelining = True
+EOF
+
+# Create log file with proper permissions
+touch /var/log/ansible.log
+chown jenkins:jenkins /var/log/ansible.log
+chmod 644 /var/log/ansible.log
+
+echo "=== Ansible Installation Completed $(date) ==="
+
 # Add Jenkins repository and install Jenkins
 wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo || echo "Failed to download Jenkins repo"
 rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key || echo "Failed to import Jenkins GPG key"

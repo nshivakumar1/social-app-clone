@@ -5,7 +5,12 @@
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
-        "dev": "nodemon server.js"
+        "dev": "nodemon server.js",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "test": "jest --coverage",
+        "test:watch": "jest --watch",
+        "sonar": "sonar-scanner"
     },
     "dependencies": {
         "cors": "^2.8.5",
@@ -18,7 +23,11 @@
         "winston-elasticsearch": "^0.19.0"
     },
     "devDependencies": {
-        "nodemon": "^3.0.1"
+        "nodemon": "^3.0.1",
+        "eslint": "^8.50.0",
+        "jest": "^29.7.0",
+        "supertest": "^6.3.3",
+        "sonarqube-scanner": "^3.3.0"
     },
     "keywords": [
         "social",

@@ -1,0 +1,88 @@
+---
+# Health check and validation playbook
+
+- name: Perform Health Checks
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Check Application Load Balancer health
+      uri:
+        url: "http://{{ alb_dns }}{{ app_health_check_path }}"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: alb_health
+      retries: 3
+      delay: 5
+      until: alb_health.status == 200
+
+    - name: Display health check response
+      debug:
+        msg: "{{ alb_health.json }}"
+
+    - name: Verify ECS service is running
+      shell: |
+        aws ecs describe-services \
+          --cluster {{ ecs_cluster_name }} \
+          --services {{ ecs_service_name }} \
+          --region {{ aws_region }} \
+          --query 'services[0].runningCount' \
+          --output text
+      register: running_count
+      changed_when: false
+
+    - name: Assert service has running tasks
+      assert:
+        that:
+          - running_count.stdout | int > 0
+        fail_msg: "No running tasks found for service {{ ecs_service_name }}"
+        success_msg: "Service {{ ecs_service_name }} has {{ running_count.stdout }} running task(s)"
+
+    - name: Check ECS task health
+      shell: |
+        aws ecs describe-tasks \
+          --cluster {{ ecs_cluster_name }} \
+          --tasks $(aws ecs list-tasks --cluster {{ ecs_cluster_name }} --service-name {{ ecs_service_name }} --region {{ aws_region }} --query 'taskArns[0]' --output text) \
+          --region {{ aws_region }} \
+          --query 'tasks[0].lastStatus' \
+          --output text
+      register: task_status
+      changed_when: false
+
+    - name: Display task status
+      debug:
+        msg: "ECS Task Status: {{ task_status.stdout }}"
+
+    - name: Verify task is running
+      assert:
+        that:
+          - task_status.stdout == "RUNNING"
+        fail_msg: "Task is not in RUNNING state"
+        success_msg: "Task is healthy and running"
+
+    - name: Test application functionality
+      uri:
+        url: "http://{{ alb_dns }}"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: app_response
+
+    - name: Summary report
+      debug:
+        msg: |
+          ========================================
+          Health Check Summary
+          ========================================
+          Application URL: http://{{ alb_dns }}
+          Health Endpoint: http://{{ alb_dns }}{{ app_health_check_path }}
+          ECS Cluster: {{ ecs_cluster_name }}
+          ECS Service: {{ ecs_service_name }}
+          Running Tasks: {{ running_count.stdout }}
+          Task Status: {{ task_status.stdout }}
+          Application Status: ✓ HEALTHY
+          ========================================

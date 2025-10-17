@@ -1,0 +1,34 @@
+---
+# Jenkins-specific variables
+
+# Jenkins Configuration
+jenkins_version: "2.426.1"
+jenkins_home: /var/lib/jenkins
+jenkins_http_port: 8080
+jenkins_url: "http://100.28.67.190:8080"
+
+# Jenkins Plugins
+jenkins_plugins:
+  - docker-workflow
+  - pipeline-aws
+  - aws-credentials
+  - git
+  - github
+  - slack
+  - jira
+  - pipeline-stage-view
+  - workflow-aggregator
+  - blueocean
+
+# Jenkins Admin
+jenkins_admin_username: admin
+jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+
+# AWS Credentials
+aws_credentials_id: aws-credentials
+slack_webhook_id: slack-webhook
+jira_credentials_id: jira-credentials
+
+# Build Configuration
+jenkins_build_number_retention: 30
+jenkins_artifact_retention_days: 7

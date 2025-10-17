@@ -1,0 +1,42 @@
+---
+# Main playbook for Social App Clone infrastructure
+
+- name: Configure Jenkins CI/CD Server
+  hosts: jenkins
+  become: yes
+  roles:
+    - jenkins-setup
+  tags:
+    - jenkins
+    - ci-cd
+
+- name: Deploy Application to ECS
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  roles:
+    - ecs-deployment
+  tags:
+    - ecs
+    - deployment
+    - production
+
+- name: Setup Monitoring Stack
+  hosts: monitoring
+  become: yes
+  roles:
+    - monitoring-setup
+  tags:
+    - monitoring
+    - elk
+
+- name: Health Check and Validation
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Health check playbook
+      import_playbook: health-check.yml
+  tags:
+    - health-check
+    - validation

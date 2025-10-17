@@ -1,0 +1,159 @@
+---
+# Playbook for deploying Social App Clone to AWS ECS
+
+- name: Deploy Social App Clone to ECS
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  vars_files:
+    - ../group_vars/all.yml
+  vars:
+    deployment_timestamp: "{{ ansible_date_time.epoch }}"
+
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg: |
+          Starting deployment of {{ app_name }}
+          Environment: {{ environment }}
+          Docker Image: {{ docker_image }}:{{ docker_tag }}
+          ECS Cluster: {{ ecs_cluster_name }}
+          ECS Service: {{ ecs_service_name }}
+
+    - name: Ensure AWS CLI is installed
+      command: aws --version
+      register: aws_cli_version
+      changed_when: false
+
+    - name: Display AWS CLI version
+      debug:
+        msg: "{{ aws_cli_version.stdout }}"
+
+    - name: Get current task definition
+      shell: |
+        aws ecs describe-task-definition \
+          --task-definition {{ ecs_task_family }} \
+          --region {{ aws_region }} \
+          --query 'taskDefinition' \
+          --output json
+      register: current_task_definition
+      changed_when: false
+
+    - name: Build new Docker image (optional)
+      docker_image:
+        name: "{{ docker_image }}"
+        tag: "{{ docker_tag }}"
+        build:
+          path: "{{ playbook_dir }}/../../app"
+          dockerfile: Dockerfile
+        source: build
+        push: no
+      when: build_image is defined and build_image | bool
+      tags:
+        - build
+
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ aws_region }} | \
+        docker login --username AWS --password-stdin {{ ecr_registry }}
+      when: push_image is defined and push_image | bool
+      tags:
+        - push
+
+    - name: Push Docker image to ECR
+      docker_image:
+        name: "{{ docker_image }}"
+        tag: "{{ docker_tag }}"
+        push: yes
+        source: local
+      when: push_image is defined and push_image | bool
+      tags:
+        - push
+
+    - name: Register new task definition
+      ecs_taskdefinition:
+        family: "{{ ecs_task_family }}"
+        region: "{{ aws_region }}"
+        containers:
+          - name: "{{ app_name }}"
+            image: "{{ docker_image }}:{{ docker_tag }}"
+            memory: 512
+            cpu: 256
+            essential: true
+            portMappings:
+              - containerPort: "{{ app_port }}"
+                protocol: tcp
+            logConfiguration:
+              logDriver: awslogs
+              options:
+                awslogs-group: "/ecs/{{ ecs_task_family }}"
+                awslogs-region: "{{ aws_region }}"
+                awslogs-stream-prefix: ecs
+            environment:
+              - name: NODE_ENV
+                value: production
+              - name: PORT
+                value: "{{ app_port }}"
+        network_mode: awsvpc
+        launch_type: FARGATE
+        cpu: "256"
+        memory: "512"
+        state: present
+      register: task_definition
+
+    - name: Update ECS service
+      ecs_service:
+        name: "{{ ecs_service_name }}"
+        cluster: "{{ ecs_cluster_name }}"
+        region: "{{ aws_region }}"
+        task_definition: "{{ task_definition.taskdefinition.family }}:{{ task_definition.taskdefinition.revision }}"
+        desired_count: 1
+        deployment_configuration:
+          maximum_percent: 200
+          minimum_healthy_percent: 100
+        state: present
+      register: service_update
+
+    - name: Wait for service to stabilize
+      shell: |
+        aws ecs wait services-stable \
+          --cluster {{ ecs_cluster_name }} \
+          --services {{ ecs_service_name }} \
+          --region {{ aws_region }}
+      async: "{{ deployment_timeout }}"
+      poll: 10
+      register: service_stable
+
+    - name: Get running tasks
+      shell: |
+        aws ecs list-tasks \
+          --cluster {{ ecs_cluster_name }} \
+          --service-name {{ ecs_service_name }} \
+          --region {{ aws_region }} \
+          --query 'taskArns[0]' \
+          --output text
+      register: running_task
+      changed_when: false
+
+    - name: Display deployment results
+      debug:
+        msg: |
+          Deployment completed successfully!
+          Task Definition: {{ task_definition.taskdefinition.family }}:{{ task_definition.taskdefinition.revision }}
+          Running Task: {{ running_task.stdout }}
+          Application URL: http://{{ alb_dns }}
+          Health Check: http://{{ alb_dns }}{{ app_health_check_path }}
+
+    - name: Perform health check
+      uri:
+        url: "http://{{ alb_dns }}{{ app_health_check_path }}"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: "{{ health_check_retries }}"
+      delay: "{{ health_check_delay }}"
+      until: health_check.status == 200
+
+    - name: Health check passed
+      debug:
+        msg: "Application is healthy and responding correctly!"

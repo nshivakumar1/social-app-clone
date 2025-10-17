@@ -1,0 +1,45 @@
+---
+# Global variables for all hosts
+
+# Project Information
+project_name: social-app-clone
+project_version: "2.0.0"
+app_environment: production
+
+# AWS Configuration
+aws_region: us-east-1
+aws_account_id: "297997106614"
+
+# ECR Configuration
+ecr_repository: social-app-clone
+ecr_registry: "{{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com"
+
+# ECS Configuration
+ecs_cluster_name: social-app-clone
+ecs_service_name: social-app-clone
+ecs_task_family: social-app-clone-task
+
+# Application Configuration
+app_name: social-app-clone
+app_port: 3000
+app_health_check_path: /health
+
+# Docker Configuration
+docker_image: "{{ ecr_registry }}/{{ ecr_repository }}"
+docker_tag: latest
+
+# Load Balancer
+alb_dns: social-app-clone-653043147.us-east-1.elb.amazonaws.com
+
+# Monitoring
+enable_cloudwatch_logs: true
+log_retention_days: 7
+
+# Security
+enable_security_scanning: true
+enable_ssl: false
+
+# Deployment
+deployment_timeout: 600
+health_check_retries: 5
+health_check_delay: 10
