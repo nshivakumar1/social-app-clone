@@ -92,7 +92,8 @@ resource "null_resource" "eks_cleanup" {
 
   depends_on = [
     aws_eks_cluster.main,
-    aws_eks_node_group.main
+    aws_eks_fargate_profile.app,
+    aws_eks_fargate_profile.kube_system
   ]
 }
 

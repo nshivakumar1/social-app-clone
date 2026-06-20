@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: social-app-clone
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: social-app-clone
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Allow traffic from ingress controller only
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 3000
+
+  egress:
+  # Allow DNS
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow HTTPS outbound (ECR, AWS APIs, Elasticsearch)
+  - ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP outbound (health checks, npm in dev)
+  - ports:
+    - protocol: TCP
+      port: 80

@@ -1,0 +1,231 @@
+# Policy Reporter — web UI for Trivy Operator scan results (VulnerabilityReports → PolicyReports)
+# Shows dashboards for vulnerabilities, misconfigs, secrets, RBAC findings
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: policy-reporter
+  namespace: policy-reporter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: policy-reporter
+rules:
+- apiGroups: [""]
+  resources: [namespaces]
+  verbs: [get, list, watch]
+- apiGroups: [wgpolicyk8s.io]
+  resources: [policyreports, clusterpolicyreports]
+  verbs: [get, list, watch]
+- apiGroups: [aquasecurity.github.io]
+  resources:
+  - vulnerabilityreports
+  - configauditreports
+  - exposedsecretreports
+  - rbacassessmentreports
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: policy-reporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: policy-reporter
+subjects:
+- kind: ServiceAccount
+  name: policy-reporter
+  namespace: policy-reporter
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: policy-reporter-config
+  namespace: policy-reporter
+data:
+  config.yaml: |
+    api:
+      port: 8080
+    rest:
+      enabled: true
+    metrics:
+      enabled: true
+    reportFilter:
+      namespaces:
+        include: []
+      clusterReports: true
+    database:
+      type: sqlite
+      database: /app/data/sqlite.db
+    leaderElection:
+      enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-reporter
+  namespace: policy-reporter
+  labels:
+    app: policy-reporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: policy-reporter
+  template:
+    metadata:
+      labels:
+        app: policy-reporter
+    spec:
+      serviceAccountName: policy-reporter
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1234
+        fsGroup: 1234
+      containers:
+      - name: policy-reporter
+        image: ghcr.io/kyverno/policy-reporter:2.24.1
+        imagePullPolicy: IfNotPresent
+        args: [--config=/app/config/config.yaml, --template-dir=/app/templates]
+        ports:
+        - name: http
+          containerPort: 8080
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+        - name: data
+          mountPath: /app/data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: policy-reporter-config
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy-reporter
+  namespace: policy-reporter
+spec:
+  selector:
+    app: policy-reporter
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-reporter-ui
+  namespace: policy-reporter
+  labels:
+    app: policy-reporter-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: policy-reporter-ui
+  template:
+    metadata:
+      labels:
+        app: policy-reporter-ui
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: policy-reporter-ui
+        image: ghcr.io/kyverno/policy-reporter-ui:1.9.4
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: POLICY_REPORTER_URL
+          value: http://policy-reporter:8080
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy-reporter-ui
+  namespace: policy-reporter
+spec:
+  selector:
+    app: policy-reporter-ui
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trivy-dashboard
+  namespace: policy-reporter
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: trivy-dashboard-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Trivy Dashboard — restricted"
+spec:
+  rules:
+  - host: trivy.example.com   # replace with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: policy-reporter-ui
+            port:
+              number: 8080
+  # tls:
+  # - hosts:
+  #   - trivy.example.com
+  #   secretName: trivy-tls

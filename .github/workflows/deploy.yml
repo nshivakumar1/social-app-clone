@@ -1,0 +1,181 @@
+name: Build, Scan & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  ECR_REGISTRY:   ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: social-app-clone
+  ECS_CLUSTER:    social-app-clone
+  ECS_SERVICE:    social-app-clone
+  AWS_REGION:     us-east-1
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: app/coverage
+
+  build:
+    name: Build & Scan
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      security-events: write
+      contents: read
+    outputs:
+      image-tag: ${{ steps.meta.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - id: meta
+        name: Set image tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build image
+        working-directory: app
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg VCS_REF="${{ steps.meta.outputs.sha }}" \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.meta.outputs.sha }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+
+      - name: Scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:  ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }}
+          format:     sarif
+          output:     trivy-results.sarif
+          severity:   CRITICAL,HIGH
+          exit-code:  '1'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Push to ECR
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.meta.outputs.sha }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Capture current task definition (rollback target)
+        id: current
+        run: |
+          TASK_DEF=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "task-def=$TASK_DEF" >> $GITHUB_OUTPUT
+          echo "Rollback target: $TASK_DEF"
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --region "$AWS_REGION"
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION"
+
+      - name: Health check (poll, no sleep)
+        run: |
+          ECS_URL="${{ secrets.ECS_URL }}"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$ECS_URL/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 120s"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure() && steps.current.outputs.task-def != ''
+        run: |
+          echo "Rolling back to ${{ steps.current.outputs.task-def }}"
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "${{ steps.current.outputs.task-def }}" \
+            --region "$AWS_REGION"
+
+      - name: Update GitOps manifests
+        if: success()
+        run: |
+          IMAGE_TAG="${{ needs.build.outputs.image-tag }}"
+          sed -i "s|image: .*social-app-clone:.*|image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" \
+            infrastructure/k8s-manifests/deployment.yaml
+
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add infrastructure/k8s-manifests/deployment.yaml
+          git diff --staged --quiet || git commit -m "GitOps: Update image to $IMAGE_TAG [skip ci]"
+          git push

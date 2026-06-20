@@ -17,7 +17,8 @@ spec:
     spec:
       containers:
       - name: social-app-clone
-        image: 297997106614.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:latest
+        image: 930342219780.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 3000
           name: http
@@ -27,6 +28,16 @@ spec:
           value: "production"
         - name: PORT
           value: "3000"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: social-app-secrets
+              key: jwt-secret
+        - name: ALLOWED_ORIGINS
+          valueFrom:
+            configMapKeyRef:
+              name: social-app-config
+              key: allowed-origins
         resources:
           requests:
             memory: "256Mi"
@@ -50,3 +61,10 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          readOnlyRootFilesystem: false
+      securityContext:
+        fsGroup: 1001

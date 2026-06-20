@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: social-app-clone
+  namespace: default
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: social-app-clone

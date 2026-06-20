@@ -1,0 +1,443 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-social-app-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  social-app.json: |
+    {
+      "uid": "social-app-overview",
+      "title": "SocialApp — Overview",
+      "description": "Real-time metrics and logs for the social-app-clone deployment",
+      "tags": ["social-app", "ecs", "eks", "production"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "schemaVersion": 38,
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "ALB 5XX Error Rate",
+          "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 5 },
+                  { "color": "red", "value": 20 }
+                ]
+              },
+              "unit": "short"
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "5XX Errors",
+            "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+            "expression": "",
+            "id": "",
+            "matchExact": true,
+            "metricEditorMode": 0,
+            "metricName": "HTTPCode_Target_5XX_Count",
+            "metricQueryType": 0,
+            "namespace": "AWS/ApplicationELB",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "Sum"
+          }]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "P95 Response Time",
+          "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.5 },
+                  { "color": "red", "value": 1.0 }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "P95 Latency",
+            "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+            "metricName": "TargetResponseTime",
+            "namespace": "AWS/ApplicationELB",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "p95"
+          }]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Healthy Host Count",
+          "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "green", "value": 2 }
+                ]
+              },
+              "unit": "short"
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "Healthy Hosts",
+            "dimensions": { "TargetGroup": "*", "LoadBalancer": "app/social-app-clone/*" },
+            "metricName": "HealthyHostCount",
+            "namespace": "AWS/ApplicationELB",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "Average"
+          }]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "ECS CPU Utilization",
+          "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 80 }
+                ]
+              },
+              "unit": "percent",
+              "max": 100
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "CPU %",
+            "dimensions": {
+              "ClusterName": "social-app-clone",
+              "ServiceName": "social-app-clone"
+            },
+            "metricName": "CPUUtilization",
+            "namespace": "AWS/ECS",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "Average"
+          }]
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "ECS Memory Utilization",
+          "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 70 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent",
+              "max": 100
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "Memory %",
+            "dimensions": {
+              "ClusterName": "social-app-clone",
+              "ServiceName": "social-app-clone"
+            },
+            "metricName": "MemoryUtilization",
+            "namespace": "AWS/ECS",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "Average"
+          }]
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Request Rate (req/min)",
+          "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{ "color": "blue", "value": null }]
+              },
+              "unit": "reqpm"
+            }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [{
+            "alias": "Requests",
+            "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+            "metricName": "RequestCount",
+            "namespace": "AWS/ApplicationELB",
+            "period": "60",
+            "refId": "A",
+            "region": "default",
+            "statistic": "Sum"
+          }]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Request Volume & Error Rate",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "short" },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "5XX Errors" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+                  { "id": "custom.fillOpacity", "value": 20 }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Total Requests" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }
+                ]
+              }
+            ]
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [
+            {
+              "alias": "Total Requests",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "RequestCount",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "A",
+              "region": "default",
+              "statistic": "Sum"
+            },
+            {
+              "alias": "5XX Errors",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "HTTPCode_Target_5XX_Count",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "B",
+              "region": "default",
+              "statistic": "Sum"
+            },
+            {
+              "alias": "4XX Errors",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "HTTPCode_Target_4XX_Count",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "C",
+              "region": "default",
+              "statistic": "Sum"
+            }
+          ],
+          "options": {
+            "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Response Time (P50 / P95 / P99)",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "s" }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [
+            {
+              "alias": "P50",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "TargetResponseTime",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "A",
+              "region": "default",
+              "statistic": "p50"
+            },
+            {
+              "alias": "P95",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "TargetResponseTime",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "B",
+              "region": "default",
+              "statistic": "p95"
+            },
+            {
+              "alias": "P99",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "TargetResponseTime",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "C",
+              "region": "default",
+              "statistic": "p99"
+            }
+          ],
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "ECS CPU & Memory Utilization",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "min": 0, "max": 100 },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "CPU %" },
+                "properties": [{ "id": "color", "value": { "fixedColor": "#FF6B6B", "mode": "fixed" } }]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Memory %" },
+                "properties": [{ "id": "color", "value": { "fixedColor": "#4ECDC4", "mode": "fixed" } }]
+              }
+            ]
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [
+            {
+              "alias": "CPU %",
+              "dimensions": { "ClusterName": "social-app-clone", "ServiceName": "social-app-clone" },
+              "metricName": "CPUUtilization",
+              "namespace": "AWS/ECS",
+              "period": "60",
+              "refId": "A",
+              "region": "default",
+              "statistic": "Average"
+            },
+            {
+              "alias": "Memory %",
+              "dimensions": { "ClusterName": "social-app-clone", "ServiceName": "social-app-clone" },
+              "metricName": "MemoryUtilization",
+              "namespace": "AWS/ECS",
+              "period": "60",
+              "refId": "B",
+              "region": "default",
+              "statistic": "Average"
+            }
+          ],
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }
+          }
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "ALB Active Connections",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "short" }
+          },
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+          "targets": [
+            {
+              "alias": "Active Connections",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "ActiveConnectionCount",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "A",
+              "region": "default",
+              "statistic": "Sum"
+            },
+            {
+              "alias": "New Connections",
+              "dimensions": { "LoadBalancer": "app/social-app-clone/*" },
+              "metricName": "NewConnectionCount",
+              "namespace": "AWS/ApplicationELB",
+              "period": "60",
+              "refId": "B",
+              "region": "default",
+              "statistic": "Sum"
+            }
+          ],
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }
+          }
+        },
+        {
+          "id": 11,
+          "type": "logs",
+          "title": "Application Logs (Loki)",
+          "gridPos": { "x": 0, "y": 20, "w": 24, "h": 10 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "targets": [{
+            "expr": "{app=\"social-app-clone\"}",
+            "refId": "A",
+            "queryType": "range"
+          }],
+          "options": {
+            "dedupStrategy": "none",
+            "enableLogDetails": true,
+            "prettifyLogMessage": true,
+            "showLabels": false,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          }
+        },
+        {
+          "id": 12,
+          "type": "logs",
+          "title": "Error Logs Only",
+          "gridPos": { "x": 0, "y": 30, "w": 24, "h": 8 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "targets": [{
+            "expr": "{app=\"social-app-clone\"} |= \"error\" | json | level=~\"error|Error|ERROR\"",
+            "refId": "A",
+            "queryType": "range"
+          }],
+          "options": {
+            "dedupStrategy": "none",
+            "enableLogDetails": true,
+            "prettifyLogMessage": true,
+            "showTime": true,
+            "sortOrder": "Descending"
+          }
+        }
+      ]
+    }

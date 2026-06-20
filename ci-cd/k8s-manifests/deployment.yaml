@@ -29,7 +29,7 @@ spec:
     spec:
       containers:
       - name: social-app-clone
-        image: 297997106614.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:latest
+        image: 930342219780.dkr.ecr.us-east-1.amazonaws.com/social-app-clone:latest
         ports:
         - containerPort: 3000
           name: http

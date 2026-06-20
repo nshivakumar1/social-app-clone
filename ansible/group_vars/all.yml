@@ -8,7 +8,7 @@ app_environment: production
 
 # AWS Configuration
 aws_region: us-east-1
-aws_account_id: "297997106614"
+aws_account_id: "930342219780"
 
 # ECR Configuration
 ecr_repository: social-app-clone
@@ -29,7 +29,7 @@ docker_image: "{{ ecr_registry }}/{{ ecr_repository }}"
 docker_tag: latest
 
 # Load Balancer
-alb_dns: social-app-clone-653043147.us-east-1.elb.amazonaws.com
+alb_dns: ""  # populated after terraform apply
 
 # Monitoring
 enable_cloudwatch_logs: true

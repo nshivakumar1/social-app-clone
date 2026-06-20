@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --only=production && npm cache clean --force
+# Install dependencies (ci is deterministic and faster than install)
+RUN npm ci --only=production && npm cache clean --force
 
 # Copy app source
 COPY . .
@@ -28,5 +28,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
 
-# Start the application
-CMD ["npm", "start"]
+# Start the application (skip npm wrapper layer)
+CMD ["node", "server.js"]

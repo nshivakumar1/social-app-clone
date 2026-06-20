@@ -2,217 +2,239 @@ pipeline {
     agent any
 
     triggers {
-        githubPush()  // Trigger builds on GitHub push events
+        githubPush()
     }
 
     environment {
-        ECR_REGISTRY = '297997106614.dkr.ecr.us-east-1.amazonaws.com'
-        ECR_REPOSITORY = 'social-app-clone'
-        AWS_REGION = 'us-east-1'
-        ECS_CLUSTER = 'social-app-clone'
-        ECS_SERVICE = 'social-app-clone'
-        EKS_CLUSTER = 'social-app-eks'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        ECS_URL = 'http://social-app-clone-1321601292.us-east-1.elb.amazonaws.com'
+        ECR_REGISTRY    = '297997106614.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REPOSITORY  = 'social-app-clone'
+        AWS_REGION      = 'us-east-1'
+        ECS_CLUSTER     = 'social-app-clone'
+        ECS_SERVICE     = 'social-app-clone'
+        EKS_CLUSTER     = 'social-app-eks'
+        IMAGE_TAG       = "${BUILD_NUMBER}"
     }
 
     stages {
-        stage('🔍 Checkout') {
+        stage('Checkout') {
             steps {
                 script {
-                    echo "📥 Checking out code from GitHub..."
                     checkout scm
-                    env.COMMIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.COMMIT_SHA     = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     env.COMMIT_MESSAGE = sh(script: 'git log -1 --pretty=format:%s', returnStdout: true).trim()
-                    env.AUTHOR = sh(script: 'git log -1 --pretty=format:%an', returnStdout: true).trim()
-                    echo "📝 Commit: ${env.COMMIT_SHA} by ${env.AUTHOR} - ${env.COMMIT_MESSAGE}"
-                }
-            }
-        }
-        
-        stage('🧪 Test') {
-            steps {
-                script {
-                    echo "🧪 Running tests..."
-                    dir('app') {
-                        sh 'npm ci || echo "⚠️ npm install failed"'
-                        sh 'npm test || echo "⚠️ Tests not configured yet"'
+                    env.AUTHOR         = sh(script: 'git log -1 --pretty=format:%an', returnStdout: true).trim()
+                    echo "Commit: ${env.COMMIT_SHA} by ${env.AUTHOR} — ${env.COMMIT_MESSAGE}"
+
+                    // Capture current task def for rollback
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        env.PREVIOUS_TASK_DEF = sh(
+                            script: "aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --region ${AWS_REGION} --query 'services[0].taskDefinition' --output text 2>/dev/null || echo 'none'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Rollback target: ${env.PREVIOUS_TASK_DEF}"
                     }
                 }
             }
         }
 
-        stage('📊 Code Quality Analysis') {
+        stage('Test') {
             steps {
-                script {
-                    echo "📊 Running code quality checks..."
-                    dir('app') {
-                        // ESLint static code analysis
-                        sh 'npm run lint || echo "⚠️ ESLint found issues"'
+                dir('app') {
+                    sh 'npm ci'
+                    sh 'npm test'
+                }
+            }
+        }
 
-                        // Security vulnerability scan
-                        sh 'npm audit --audit-level=moderate || echo "⚠️ Security vulnerabilities found"'
+        stage('Code Quality') {
+            steps {
+                dir('app') {
+                    sh 'npm run lint'
+                    sh 'npm audit --audit-level=moderate'
 
-                        // SonarQube analysis (if configured)
-                        withCredentials([[
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-credentials',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]]) {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        script {
                             try {
                                 def sonarToken = sh(
                                     script: 'aws ssm get-parameter --name "/social-app/sonar/token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
                                     returnStdout: true
                                 ).trim()
-
                                 def sonarHost = sh(
                                     script: 'aws ssm get-parameter --name "/social-app/sonar/host" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
                                     returnStdout: true
                                 ).trim()
 
-                                if (sonarToken != "not-configured" && sonarHost != "not-configured") {
-                                    echo "🔍 Running SonarQube analysis..."
+                                if (sonarToken != 'not-configured' && sonarHost != 'not-configured') {
                                     sh """
                                         sonar-scanner \
                                           -Dsonar.projectKey=social-app-clone \
                                           -Dsonar.sources=. \
                                           -Dsonar.host.url=${sonarHost} \
-                                          -Dsonar.login=${sonarToken} \
-                                          || echo "⚠️ SonarQube scan failed"
+                                          -Dsonar.login=${sonarToken}
                                     """
-                                    echo "✅ SonarQube analysis complete"
                                 } else {
-                                    echo "💡 SonarQube not configured - skipping"
+                                    echo 'SonarQube not configured — skipping'
                                 }
                             } catch (Exception e) {
-                                echo "⚠️ SonarQube analysis failed: ${e.getMessage()}"
+                                echo "SonarQube analysis failed: ${e.getMessage()}"
                             }
                         }
-
-                        echo "✅ Code quality checks completed"
                     }
                 }
             }
         }
-        
-        stage('🐋 Build Docker Image') {
+
+        stage('Build Docker Image') {
+            steps {
+                dir('app') {
+                    sh "docker build --platform linux/amd64 -t ${ECR_REPOSITORY}:${IMAGE_TAG} ."
+                    sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:${env.COMMIT_SHA}"
+                    sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:latest"
+                }
+            }
+        }
+
+        stage('Security Scan') {
             steps {
                 script {
-                    echo "🔨 Building Docker image..."
-                    dir('app') {
-                        sh "docker build --platform linux/amd64 -t ${ECR_REPOSITORY}:${IMAGE_TAG} ."
-                        sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:latest"
-                        sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REPOSITORY}:${env.COMMIT_SHA}"
-                    }
-                    echo "✅ Docker image built successfully"
+                    sh """
+                        docker run --rm \
+                          -v /var/run/docker.sock:/var/run/docker.sock \
+                          aquasec/trivy:latest image \
+                          --exit-code 1 \
+                          --severity CRITICAL,HIGH \
+                          --no-progress \
+                          ${ECR_REPOSITORY}:${IMAGE_TAG} || true
+                    """
+                    // || true so high-sev findings don't block pipeline on first run;
+                    // remove || true once baseline is clean
                 }
             }
         }
-        
-        stage('📤 Push to ECR') {
+
+        stage('Push to ECR') {
             steps {
-                script {
-                    withCredentials([[
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]]) {
-                        sh "echo '🔐 Logging into ECR...'"
-                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
-
-                        sh "echo '📤 Pushing images to ECR...'"
-                        sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-                        sh "docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-                        sh "docker tag ${ECR_REPOSITORY}:${env.COMMIT_SHA} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
-
-                        sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-                        sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-                        sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
-
-                        sh "echo '✅ Images pushed successfully'"
-                    }
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
+                    sh "docker tag ${ECR_REPOSITORY}:${IMAGE_TAG}       ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                    sh "docker tag ${ECR_REPOSITORY}:${env.COMMIT_SHA}  ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
+                    sh "docker tag ${ECR_REPOSITORY}:latest              ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+                    sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                    sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${env.COMMIT_SHA}"
+                    sh "docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
                 }
             }
         }
-        
-        stage('🚀 Deploy to ECS') {
+
+        stage('Deploy to ECS') {
             steps {
-                script {
-                    withCredentials([[
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]]) {
-                        sh "echo '🚀 Deploying to ECS Fargate...'"
-                        sh "aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}"
-                        sh "echo '⏳ Waiting for ECS deployment to stabilize...'"
-                        sh "aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --region ${AWS_REGION} --cli-read-timeout 300 --cli-connect-timeout 60"
-                        sh "echo '✅ ECS deployment completed'"
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh "aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}"
+                    sh "aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --region ${AWS_REGION} --cli-read-timeout 300 --cli-connect-timeout 60"
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    script {
+                        def ecsUrl = sh(
+                            script: 'aws ssm get-parameter --name "/social-app/ecs/url" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+                            returnStdout: true
+                        ).trim()
+
+                        if (ecsUrl != 'not-configured') {
+                            def passed = false
+                            for (int i = 0; i < 12; i++) {
+                                def status = sh(
+                                    script: "curl -s -o /dev/null -w '%{http_code}' ${ecsUrl}/health || echo '000'",
+                                    returnStdout: true
+                                ).trim()
+                                if (status == '200') {
+                                    echo "Health check passed on attempt ${i + 1}"
+                                    passed = true
+                                    break
+                                }
+                                echo "Attempt ${i + 1}: HTTP ${status} — waiting 10s"
+                                if (i < 11) sleep(10)
+                            }
+                            if (!passed) {
+                                error("Health check failed after 120s")
+                            }
+                        } else {
+                            echo 'ECS URL not in SSM — skipping health check'
+                        }
                     }
                 }
             }
         }
-        
-        stage('📝 Update GitOps Manifests') {
+
+        stage('Update GitOps Manifests') {
             steps {
                 script {
                     try {
-                        sh "echo '📝 Updating Kubernetes manifests with new image...'"
-
-                        // Update deployment.yaml with new image tag
                         sh """
-                            sed -i 's|image: .*social-app-clone:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}|g' infrastructure/k8s-manifests/deployment.yaml || echo 'sed failed'
+                            sed -i 's|image: .*social-app-clone:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}|g' \
+                              infrastructure/k8s-manifests/deployment.yaml
                         """
-
-                        sh "echo '📋 Updated deployment.yaml with image tag: ${IMAGE_TAG}'"
-                        sh "cat infrastructure/k8s-manifests/deployment.yaml | grep 'image:'"
-
-                        // Commit and push if there are changes
-                        sh "git config user.email jenkins@social-app.com"
-                        sh "git config user.name 'Jenkins GitOps'"
-                        sh "git add infrastructure/k8s-manifests/deployment.yaml || true"
-                        sh "git diff --staged --quiet || git commit -m 'GitOps: Update image to ${IMAGE_TAG} [skip ci]' || true"
-                        sh "git push origin main || echo '⚠️ Git push failed (might be up to date)'"
-
-                        echo "✅ GitOps manifests updated successfully"
+                        sh 'git config user.email jenkins@social-app.com'
+                        sh 'git config user.name "Jenkins GitOps"'
+                        sh 'git add infrastructure/k8s-manifests/deployment.yaml'
+                        sh "git diff --staged --quiet || git commit -m 'GitOps: Update image to ${IMAGE_TAG} [skip ci]'"
+                        sh 'git push origin main || echo "Push failed — may already be up to date"'
                     } catch (Exception e) {
-                        echo "⚠️ GitOps update failed: ${e.getMessage()}"
-                        echo "🔄 Continuing with deployment..."
+                        echo "GitOps update failed: ${e.getMessage()} — continuing"
                     }
                 }
             }
         }
-        
-        stage('🔄 Setup ArgoCD Application') {
+
+        stage('ArgoCD Sync') {
             steps {
-                script {
-                    withCredentials([[
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    script {
                         try {
-                            sh "echo '🔄 Configuring EKS kubeconfig...'"
-                            sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER} || echo 'EKS cluster not found or no access'"
-                            
+                            sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER}"
                             def kubectlWorks = sh(script: 'kubectl get nodes', returnStatus: true) == 0
-                            
                             if (kubectlWorks) {
-                                sh "echo '✅ kubectl connection successful'"
-                                
                                 sh """
-kubectl apply -f - << 'EOF' || echo "Failed to create ArgoCD application"
+kubectl apply -f - << 'EOF'
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: social-app-clone
   namespace: argocd
-  labels:
-    app: social-app-clone
 spec:
   project: default
   source:
@@ -236,97 +258,57 @@ spec:
         maxDuration: 3m
 EOF
                                 """
-                                
-                                sh 'kubectl patch app social-app-clone -n argocd -p \'{"operation":{"initiatedBy":{"username":"jenkins"},"sync":{"syncStrategy":{"hook":{}}}}}\' --type merge || echo "Sync patch failed"'
-                                echo "✅ ArgoCD application configured and synced"
-                            } else {
-                                echo "⚠️ kubectl not working - check EKS cluster and permissions"
-                                echo "📝 GitOps manifests are ready in infrastructure/k8s-manifests for manual ArgoCD setup"
+                                sh 'kubectl patch app social-app-clone -n argocd -p \'{"operation":{"initiatedBy":{"username":"jenkins"},"sync":{"syncStrategy":{"hook":{}}}}}\' --type merge || true'
                             }
                         } catch (Exception e) {
-                            echo "⚠️ ArgoCD setup failed: ${e.getMessage()}"
-                            echo "📝 You can manually create the ArgoCD application using the manifests in infrastructure/k8s-manifests"
+                            echo "ArgoCD sync failed: ${e.getMessage()}"
                         }
                     }
                 }
             }
         }
-        
-        stage('🧪 Post-Deployment Tests') {
-            steps {
-                script {
-                    sh "echo '🧪 Running post-deployment tests...'"
-                    sh "sleep 30"
-                    
-                    try {
-                        sh "echo 'Testing ECS deployment...'"
-                        sh "curl -f -s ${ECS_URL}/health || echo 'ECS health check failed'"
-                        
-                        sh "echo 'Testing main application...'"
-                        sh "curl -f -s ${ECS_URL}/ | head -5 || echo 'ECS app test failed'"
-                        
-                        echo "✅ Post-deployment tests completed"
-                    } catch (Exception e) {
-                        echo "⚠️ Some tests failed: ${e.getMessage()}"
-                    }
-                }
-            }
-        }
     }
-    
+
     post {
         always {
             script {
                 sh "docker rmi ${ECR_REPOSITORY}:${IMAGE_TAG} || true"
-                sh "docker rmi ${ECR_REPOSITORY}:latest || true"
                 sh "docker rmi ${ECR_REPOSITORY}:${env.COMMIT_SHA} || true"
+                sh "docker rmi ${ECR_REPOSITORY}:latest || true"
                 cleanWs()
             }
         }
-        
+
         success {
             script {
-                echo """
-                🎉 DEPLOYMENT SUCCESSFUL!
-                ========================
-                ✅ Build: ${IMAGE_TAG}
-                ✅ Commit: ${env.COMMIT_SHA}
-                ✅ Author: ${env.AUTHOR}
-                ✅ Image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-                ✅ ECS: ${ECS_URL}
-                ✅ Message: ${env.COMMIT_MESSAGE}
-                
-                🚀 Your social media app is live and updated!
-                📝 GitOps manifests are in infrastructure/k8s-manifests for ArgoCD
-                """
-                
-                
                 sendNotifications('success')
             }
         }
-        
+
         failure {
             script {
-                echo """
-                🚨 DEPLOYMENT FAILED!
-                =====================
-                ❌ Build: ${BUILD_NUMBER}
-                ❌ Commit: ${env.COMMIT_SHA}
-                ❌ Author: ${env.AUTHOR}
-                ❌ Stage: ${env.STAGE_NAME}
-                ❌ Message: ${env.COMMIT_MESSAGE}
-                
-                📋 Check the build logs for details
-                """
-                
-                // ONLY THIS LINE - NO OTHER NOTIFICATION CODE
+                // Rollback ECS to last stable task definition
+                if (env.PREVIOUS_TASK_DEF && env.PREVIOUS_TASK_DEF != 'none') {
+                    try {
+                        withCredentials([[
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: 'aws-credentials',
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]]) {
+                            sh "aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${env.PREVIOUS_TASK_DEF} --region ${AWS_REGION}"
+                            echo "Rolled back to ${env.PREVIOUS_TASK_DEF}"
+                        }
+                    } catch (Exception e) {
+                        echo "Rollback failed: ${e.getMessage()}"
+                    }
+                }
                 sendNotifications('failure')
             }
         }
     }
 }
 
-// ENHANCED NOTIFICATION FUNCTION - OUTSIDE PIPELINE BLOCK
 def sendNotifications(String status) {
     withCredentials([[
         $class: 'AmazonWebServicesCredentialsBinding',
@@ -334,144 +316,71 @@ def sendNotifications(String status) {
         accessKeyVariable: 'AWS_ACCESS_KEY_ID',
         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
     ]]) {
-        script {
-            echo "🔔 Starting notification process for status: ${status}"
-            
-            // Send Slack notification
-            try {
-                echo "📱 Processing Slack notification..."
-                def slackWebhook = sh(
-                    script: 'aws ssm get-parameter --name "/social-app/slack/webhook-url" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
-                    returnStdout: true
-                ).trim()
-                
-                if (slackWebhook != "not-configured") {
-                    def message = status == 'success' ? 
-                        "🎉 Deployment Successful! Build #${BUILD_NUMBER} - ${env.COMMIT_MESSAGE} - ${ECS_URL}" :
-                        "🚨 Deployment Failed! Build #${BUILD_NUMBER} - ${env.COMMIT_MESSAGE} - ${BUILD_URL}console"
-                    
-                    sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"${message}\"}' '${slackWebhook}' || echo 'Slack notification failed'"
-                    echo "✅ Slack notification sent successfully"
-                } else {
-                    echo "💡 Slack webhook not configured in AWS Systems Manager"
-                }
-            } catch (Exception e) {
-                echo "⚠️ Slack notification failed: ${e.getMessage()}"
+        // Slack
+        try {
+            def slackWebhook = sh(
+                script: 'aws ssm get-parameter --name "/social-app/slack/webhook-url" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+                returnStdout: true
+            ).trim()
+
+            if (slackWebhook != 'not-configured') {
+                def message = status == 'success'
+                    ? "Deployment Successful! Build #${BUILD_NUMBER} — ${env.COMMIT_MESSAGE}"
+                    : "Deployment Failed! Build #${BUILD_NUMBER} — ${env.COMMIT_MESSAGE} — ${BUILD_URL}console"
+                sh "curl -s -X POST -H 'Content-type: application/json' --data '{\"text\":\"${message}\"}' '${slackWebhook}'"
             }
-            
-            // Send Jira notification with correct syntax
-            try {
-                echo "🔍 Starting Jira notification process..."
-                
-                def jiraHost = 'infinityloop.atlassian.net'
-                
-                echo "📝 Fetching Jira username from AWS Systems Manager..."
-                def jiraUsername = sh(
-                    script: 'aws ssm get-parameter --name "/social-app/jira/username" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
+        } catch (Exception e) {
+            echo "Slack notification failed: ${e.getMessage()}"
+        }
+
+        // Jira — use temp file to avoid shell injection on commit message content
+        try {
+            def jiraHost     = 'infinityloop.atlassian.net'
+            def jiraUsername = sh(script: 'aws ssm get-parameter --name "/social-app/jira/username" --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"', returnStdout: true).trim()
+            def jiraToken    = sh(script: 'aws ssm get-parameter --name "/social-app/jira/api-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"', returnStdout: true).trim()
+
+            if (jiraUsername != 'not-configured' && jiraToken != 'not-configured') {
+                def summary     = status == 'success' ? "Deployment Successful - Build #${BUILD_NUMBER}" : "Deployment Failed - Build #${BUILD_NUMBER}"
+                def description = status == 'success'
+                    ? "Build #${BUILD_NUMBER} deployed successfully. Commit: ${env.COMMIT_SHA}. Author: ${env.AUTHOR}."
+                    : "Build #${BUILD_NUMBER} failed. Commit: ${env.COMMIT_SHA}. Author: ${env.AUTHOR}. Logs: ${BUILD_URL}console"
+                def priority    = status == 'success' ? 'Medium' : 'High'
+
+                // Use Groovy JSON to safely escape content — no shell injection risk
+                def payload = groovy.json.JsonOutput.toJson([
+                    fields: [
+                        project    : [key: 'SAD'],
+                        summary    : summary,
+                        description: description,
+                        issuetype  : [name: 'Task'],
+                        priority   : [name: priority]
+                    ]
+                ])
+
+                writeFile file: '/tmp/jira-payload.json', text: payload
+
+                def resp = sh(
+                    script: """
+                        curl -s -X POST \
+                          -u '${jiraUsername}:${jiraToken}' \
+                          -H 'Content-Type: application/json' \
+                          -d @/tmp/jira-payload.json \
+                          -w '\\nHTTP_STATUS:%{http_code}' \
+                          'https://${jiraHost}/rest/api/2/issue/' 2>/dev/null
+                    """,
                     returnStdout: true
                 ).trim()
-                echo "👤 Jira username: ${jiraUsername}"
-                
-                echo "🔑 Fetching Jira API token from AWS Systems Manager..."
-                def jiraToken = sh(
-                    script: 'aws ssm get-parameter --name "/social-app/jira/api-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "not-configured"',
-                    returnStdout: true
-                ).trim()
-                echo "🔑 Jira token status: ${jiraToken != 'not-configured' ? 'Found' : 'Not found'}"
-                
-                if (jiraUsername != "not-configured" && jiraToken != "not-configured") {
-                    echo "✅ Jira credentials found, proceeding with issue creation..."
-                    
-                    def issueType = 'Task'  // Available types: Task, Epic, Subtask
-                    def priority = status == 'success' ? 'Medium' : 'High'
-                    def summary = status == 'success' ? 
-                        "✅ Deployment Successful - Social App Clone #${BUILD_NUMBER}" :
-                        "🚨 Deployment Failed - Social App Clone #${BUILD_NUMBER}"
-                    
-                    def description = status == 'success' ? 
-                        "Deployment completed successfully:\\n• Build: #${BUILD_NUMBER}\\n• Commit: ${env.COMMIT_SHA}\\n• Image: ${ECR_REPOSITORY}:${IMAGE_TAG}\\n• ECS URL: ${ECS_URL}\\n• Message: ${env.COMMIT_MESSAGE}\\n\\nDeployed via Jenkins Pipeline: ${BUILD_URL}" :
-                        "Deployment failed:\\n• Build: #${BUILD_NUMBER}\\n• Commit: ${env.COMMIT_SHA}\\n• Failed Stage: ${env.STAGE_NAME}\\n• Message: ${env.COMMIT_MESSAGE}\\n\\nCheck build logs: ${BUILD_URL}console"
-                    
-                    // Test Jira API connectivity first
-                    echo "🔍 Testing Jira API connectivity..."
-                    
-                    def connectivityTest = sh(
-                        script: "curl -s -o /dev/null -w '%{http_code}' -u '${jiraUsername}:${jiraToken}' 'https://${jiraHost}/rest/api/2/myself'",
-                        returnStdout: true
-                    ).trim()
-                    echo "🔍 Jira API connectivity test result: HTTP ${connectivityTest}"
-                    
-                    if (connectivityTest == "200") {
-                        echo "✅ Jira authentication successful, creating issue..."
-                        
-                        // Try multiple issue types until one works
-                        def issueTypes = ['Task', 'Epic']  // Available types for SAD project
-                        def issueCreated = false
-                        
-                        for (String currentIssueType : issueTypes) {
-                            if (issueCreated) break
-                            
-                            echo "🔄 Trying issue type: ${currentIssueType}"
-                            
-                            def jiraResponse = sh(
-                                script: """
-                                curl -X POST \\
-                                  -u '${jiraUsername}:${jiraToken}' \\
-                                  -H 'Content-Type: application/json' \\
-                                  -d '{"fields":{"project":{"key":"SAD"},"summary":"${summary}","description":"${description}","issuetype":{"name":"${currentIssueType}"}}}' \\
-                                  -w 'HTTP_STATUS:%{http_code}' \\
-                                  'https://${jiraHost}/rest/api/2/issue/' 2>/dev/null
-                                """,
-                                returnStdout: true
-                            ).trim()
-                            
-                            echo "📋 Response for ${currentIssueType}: ${jiraResponse}"
-                            
-                            if (jiraResponse.contains('HTTP_STATUS:201')) {
-                                echo "✅ SUCCESS! Jira issue created with issue type: ${currentIssueType}"
-                                // Extract issue key (basic method without jq)
-                                def issueKey = jiraResponse.replaceAll(/.*"key":"([^"]*)".*/, '$1').replace('HTTP_STATUS:201', '')
-                                echo "🎫 Issue created: ${issueKey}"
-                                echo "🌐 View at: https://${jiraHost}/browse/${issueKey}"
-                                issueCreated = true
-                                break
-                            } else {
-                                echo "❌ ${currentIssueType} failed, trying next..."
-                            }
-                        }
-                        
-                        if (!issueCreated) {
-                            echo "⚠️ All issue types failed. Check Jira project configuration."
-                        }
-                        
-                    } else if (connectivityTest == "401") {
-                        echo "❌ Jira authentication failed - check username and API token"
-                        echo "   Username used: ${jiraUsername}"
-                    } else if (connectivityTest == "403") {
-                        echo "❌ Jira access forbidden - check user permissions"
-                    } else if (connectivityTest == "404") {
-                        echo "❌ Jira host not found - check URL: ${jiraHost}"
-                    } else {
-                        echo "❌ Jira connectivity failed - HTTP ${connectivityTest}"
-                    }
+
+                if (resp.contains('HTTP_STATUS:201')) {
+                    echo "Jira issue created"
                 } else {
-                    echo "💡 Jira not configured properly:"
-                    echo "   Username parameter (/social-app/jira/username): ${jiraUsername == 'not-configured' ? '❌ Missing' : '✅ Found'}"
-                    echo "   API Token parameter (/social-app/jira/api-token): ${jiraToken == 'not-configured' ? '❌ Missing' : '✅ Found'}"
-                    echo ""
-                    echo "📋 To fix, create these parameters in AWS Systems Manager:"
-                    echo "   1. Parameter name: /social-app/jira/username"
-                    echo "      Type: String"
-                    echo "      Value: your-email@company.com"
-                    echo "   2. Parameter name: /social-app/jira/api-token"
-                    echo "      Type: SecureString"
-                    echo "      Value: your-jira-api-token"
+                    echo "Jira issue creation returned: ${resp}"
                 }
-            } catch (Exception e) {
-                echo "⚠️ Jira notification failed with exception: ${e.getMessage()}"
+
+                sh 'rm -f /tmp/jira-payload.json'
             }
-            
-            echo "🏁 Notification process completed"
+        } catch (Exception e) {
+            echo "Jira notification failed: ${e.getMessage()}"
         }
     }
 }

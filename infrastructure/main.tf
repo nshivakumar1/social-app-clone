@@ -10,49 +10,68 @@ terraform {
       version = "~> 3.0"
     }
   }
+
+  # No remote backend — state stored locally in terraform.tfstate
+  # To enable S3 backend later:
+  # backend "s3" {
+  #   bucket         = "your-tf-state-bucket"
+  #   key            = "social-app/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   dynamodb_table = "tf-state-lock"
+  #   encrypt        = true
+  # }
 }
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
 }
 
-# Get current AWS account ID
 data "aws_caller_identity" "current" {}
+data "aws_availability_zones" "available" { state = "available" }
 
-# Get availability zones
-data "aws_availability_zones" "available" {
-  state = "available"
+# Latest Amazon Linux 2023 AMI (replaces hardcoded AMI ID)
+data "aws_ami" "amazon_linux_2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
-# VPC
+# ============================================================================
+# NETWORKING
+# ============================================================================
+
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = {
-    Name = "${var.project_name}-vpc"
-  }
+  tags = { Name = "${var.project_name}-vpc" }
 }
 
-# Internet Gateway
 resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "${var.project_name}-igw"
-  }
-
-  lifecycle {
-    create_before_destroy = false
-  }
-
-  depends_on = [
-    aws_vpc.main
-  ]
+  vpc_id     = aws_vpc.main.id
+  depends_on = [aws_vpc.main]
+  tags       = { Name = "${var.project_name}-igw" }
 }
 
-# Public Subnets
+# Public subnets (ALB, Jenkins, NAT gateways)
 resource "aws_subnet" "public" {
   count = 2
 
@@ -61,20 +80,23 @@ resource "aws_subnet" "public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
-  tags = {
-    Name = "${var.project_name}-public-${count.index + 1}"
-  }
+  tags = { Name = "${var.project_name}-public-${count.index + 1}" }
 
-  lifecycle {
-    create_before_destroy = false
-  }
-
-  depends_on = [
-    aws_internet_gateway.main
-  ]
+  depends_on = [aws_internet_gateway.main]
 }
 
-# Route Table
+# Private subnets (ECS tasks, EKS nodes)
+resource "aws_subnet" "private" {
+  count = 2
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.${count.index + 10}.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = false
+
+  tags = { Name = "${var.project_name}-private-${count.index + 1}" }
+}
+
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -83,20 +105,50 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.main.id
   }
 
-  tags = {
-    Name = "${var.project_name}-public-rt"
-  }
+  tags = { Name = "${var.project_name}-public-rt" }
 }
 
-# Route Table Association
 resource "aws_route_table_association" "public" {
-  count = length(aws_subnet.public)
-
+  count          = length(aws_subnet.public)
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
-# Security Group for ALB
+# NAT Gateway for private subnet egress
+resource "aws_eip" "nat" {
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.main]
+  tags       = { Name = "${var.project_name}-nat-eip" }
+}
+
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+  depends_on    = [aws_internet_gateway.main]
+  tags          = { Name = "${var.project_name}-nat" }
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = { Name = "${var.project_name}-private-rt" }
+}
+
+resource "aws_route_table_association" "private" {
+  count          = length(aws_subnet.private)
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
+# ============================================================================
+# SECURITY GROUPS
+# ============================================================================
+
 resource "aws_security_group" "alb" {
   name_prefix = "${var.project_name}-alb-"
   vpc_id      = aws_vpc.main.id
@@ -122,12 +174,9 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-alb-sg"
-  }
+  tags = { Name = "${var.project_name}-alb-sg" }
 }
 
-# Security Group for ECS
 resource "aws_security_group" "ecs" {
   name_prefix = "${var.project_name}-ecs-"
   vpc_id      = aws_vpc.main.id
@@ -146,12 +195,42 @@ resource "aws_security_group" "ecs" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-ecs-sg"
-  }
+  tags = { Name = "${var.project_name}-ecs-sg" }
 }
 
-# ECR Repository
+resource "aws_security_group" "jenkins" {
+  name_prefix = "jenkins-sg-"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # SSH restricted to operator IP — set jenkins_allowed_cidr in tfvars
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.jenkins_allowed_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "jenkins-security-group" }
+}
+
+# ============================================================================
+# ECR
+# ============================================================================
+
 resource "aws_ecr_repository" "app" {
   name         = var.project_name
   force_delete = true
@@ -160,12 +239,13 @@ resource "aws_ecr_repository" "app" {
     scan_on_push = true
   }
 
-  tags = {
-    Name = var.project_name
-  }
+  tags = { Name = var.project_name }
 }
 
-# ECS Cluster
+# ============================================================================
+# ECS
+# ============================================================================
+
 resource "aws_ecs_cluster" "main" {
   name = var.project_name
 
@@ -174,41 +254,28 @@ resource "aws_ecs_cluster" "main" {
     value = "enabled"
   }
 
-  tags = {
-    Name = var.project_name
-  }
+  tags = { Name = var.project_name }
 }
 
-# CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${var.project_name}"
-  retention_in_days = 7
-
-  tags = {
-    Name = var.project_name
-  }
+  retention_in_days = 14
+  tags              = { Name = var.project_name }
 }
 
-# IAM Role for ECS Task Execution
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "${var.project_name}-ecs-task-execution-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
   })
 
-  tags = {
-    Name = var.project_name
-  }
+  tags = { Name = var.project_name }
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
@@ -216,7 +283,21 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ECS Task Definition
+# Allow ECS tasks to read SSM parameters (for JWT_SECRET, ALLOWED_ORIGINS)
+resource "aws_iam_role_policy" "ecs_task_ssm" {
+  name = "${var.project_name}-ecs-ssm"
+  role = aws_iam_role.ecs_task_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameters", "ssm:GetParameter"]
+      Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/social-app/*"
+    }]
+  })
+}
+
 resource "aws_ecs_task_definition" "app" {
   family                   = var.project_name
   network_mode             = "awsvpc"
@@ -225,49 +306,47 @@ resource "aws_ecs_task_definition" "app" {
   memory                   = var.fargate_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
-  container_definitions = jsonencode([
-    {
-      name  = var.project_name
-      image = "${aws_ecr_repository.app.repository_url}:latest"
+  container_definitions = jsonencode([{
+    name  = var.project_name
+    image = "${aws_ecr_repository.app.repository_url}:latest"
 
-      portMappings = [
-        {
-          containerPort = 3000
-          hostPort      = 3000
-          protocol      = "tcp"
-        }
-      ]
+    portMappings = [{
+      containerPort = 3000
+      hostPort      = 3000
+      protocol      = "tcp"
+    }]
 
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
-        }
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.ecs.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
       }
-
-      essential = true
-
-      environment = [
-        {
-          name  = "NODE_ENV"
-          value = "production"
-        },
-        {
-          name  = "PORT"
-          value = "3000"
-        }
-      ]
     }
-  ])
 
-  tags = {
-    Name = var.project_name
-  }
+    environment = [
+      { name = "NODE_ENV", value = "production" },
+      { name = "PORT", value = "3000" }
+    ]
+
+    secrets = [
+      {
+        name      = "JWT_SECRET"
+        valueFrom = aws_ssm_parameter.jwt_secret.arn
+      },
+      {
+        name      = "ALLOWED_ORIGINS"
+        valueFrom = aws_ssm_parameter.allowed_origins.arn
+      }
+    ]
+
+    essential = true
+  }])
+
+  tags = { Name = var.project_name }
 }
 
-# Application Load Balancer
 resource "aws_alb" "main" {
   name            = var.project_name
   subnets         = aws_subnet.public[*].id
@@ -275,13 +354,7 @@ resource "aws_alb" "main" {
 
   enable_deletion_protection = false
 
-  tags = {
-    Name = var.project_name
-  }
-
-  lifecycle {
-    create_before_destroy = false
-  }
+  tags = { Name = var.project_name }
 }
 
 resource "aws_alb_target_group" "app" {
@@ -294,37 +367,61 @@ resource "aws_alb_target_group" "app" {
   deregistration_delay = 30
 
   health_check {
-    healthy_threshold   = "3"
-    interval            = "30"
+    healthy_threshold   = 3
+    interval            = 30
     protocol            = "HTTP"
     matcher             = "200"
-    timeout             = "3"
+    timeout             = 5
     path                = "/health"
-    unhealthy_threshold = "2"
+    unhealthy_threshold = 2
   }
 
-  tags = {
-    Name = var.project_name
-  }
-
-  lifecycle {
-    create_before_destroy = false
-  }
+  tags = { Name = var.project_name }
 }
 
-# Redirect all traffic from the ALB to the target group
-resource "aws_alb_listener" "front_end" {
+# HTTP — redirect to HTTPS when cert is configured, else forward directly
+resource "aws_alb_listener" "http" {
   load_balancer_arn = aws_alb.main.id
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
-    target_group_arn = aws_alb_target_group.app.id
+    type = var.acm_certificate_arn != "" ? "redirect" : "forward"
+
+    dynamic "redirect" {
+      for_each = var.acm_certificate_arn != "" ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+
+    dynamic "forward" {
+      for_each = var.acm_certificate_arn == "" ? [1] : []
+      content {
+        target_group {
+          arn = aws_alb_target_group.app.arn
+        }
+      }
+    }
+  }
+}
+
+resource "aws_alb_listener" "https" {
+  count             = var.acm_certificate_arn != "" ? 1 : 0
+  load_balancer_arn = aws_alb.main.id
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.acm_certificate_arn
+
+  default_action {
+    target_group_arn = aws_alb_target_group.app.arn
     type             = "forward"
   }
 }
 
-# ECS Service
 resource "aws_ecs_service" "main" {
   name            = var.project_name
   cluster         = aws_ecs_cluster.main.id
@@ -332,80 +429,108 @@ resource "aws_ecs_service" "main" {
   desired_count   = var.app_count
   launch_type     = "FARGATE"
 
-  # Enable faster draining during destroy
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 50
   health_check_grace_period_seconds  = 60
 
   network_configuration {
     security_groups  = [aws_security_group.ecs.id]
-    subnets          = aws_subnet.public[*].id
-    assign_public_ip = true
+    subnets          = aws_subnet.private[*].id  # private subnets — no public IP
+    assign_public_ip = false
   }
 
   load_balancer {
-    target_group_arn = aws_alb_target_group.app.id
+    target_group_arn = aws_alb_target_group.app.arn
     container_name   = var.project_name
     container_port   = 3000
   }
 
-  depends_on = [aws_alb_listener.front_end]
+  depends_on = [aws_alb_listener.http]
 
   lifecycle {
-    create_before_destroy = false
-    ignore_changes        = [desired_count]
+    ignore_changes = [desired_count]
   }
 
-  tags = {
-    Name = var.project_name
-  }
-}
-# Jenkins Security Group
-resource "aws_security_group" "jenkins" {
-  name_prefix = "jenkins-sg"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "jenkins-security-group"
-  }
+  tags = { Name = var.project_name }
 }
 
-# Jenkins IAM Role
+# ============================================================================
+# SSM PARAMETERS
+# ============================================================================
+
+resource "aws_ssm_parameter" "jwt_secret" {
+  name        = "/social-app/jwt-secret"
+  description = "JWT signing secret for the app"
+  type        = "SecureString"
+  value       = var.jwt_secret
+  overwrite   = true
+  tags        = { Name = "${var.project_name}-jwt-secret" }
+}
+
+resource "aws_ssm_parameter" "allowed_origins" {
+  name        = "/social-app/allowed-origins"
+  description = "Comma-separated allowed CORS origins"
+  type        = "String"
+  value       = var.allowed_origins
+  overwrite   = true
+  tags        = { Name = "${var.project_name}-allowed-origins" }
+}
+
+resource "aws_ssm_parameter" "jira_url" {
+  name      = "/social-app/jira/url"
+  type      = "String"
+  value     = var.jira_url
+  overwrite = true
+  tags      = { Name = "${var.project_name}-jira-url" }
+}
+
+resource "aws_ssm_parameter" "jira_username" {
+  name      = "/social-app/jira/username"
+  type      = "String"
+  value     = var.jira_username
+  overwrite = true
+  tags      = { Name = "${var.project_name}-jira-username" }
+}
+
+resource "aws_ssm_parameter" "jira_api_token" {
+  count     = var.jira_api_token != "" ? 1 : 0
+  name      = "/social-app/jira/api-token"
+  type      = "SecureString"
+  value     = var.jira_api_token
+  overwrite = true
+  tags      = { Name = "${var.project_name}-jira-api-token" }
+}
+
+resource "aws_ssm_parameter" "jira_project_key" {
+  name      = "/social-app/jira/project-key"
+  type      = "String"
+  value     = var.jira_project_key
+  overwrite = true
+  tags      = { Name = "${var.project_name}-jira-project-key" }
+}
+
+resource "aws_ssm_parameter" "jira_issue_type" {
+  name      = "/social-app/jira/issue-type"
+  type      = "String"
+  value     = var.jira_issue_type
+  overwrite = true
+  tags      = { Name = "${var.project_name}-jira-issue-type" }
+}
+
+# ============================================================================
+# JENKINS
+# ============================================================================
+
 resource "aws_iam_role" "jenkins_role" {
   name = "jenkins-ec2-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
   })
 }
 
@@ -417,15 +542,54 @@ resource "aws_iam_role_policy" "jenkins_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ECRAccess"
         Effect = "Allow"
         Action = [
-          "ecr:*",
-          "ecs:*",
-          "eks:*",
-          "ssm:GetParameter",
-          "ssm:PutParameter"
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:DescribeImages",
+          "ecr:ListImages"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "ECSAccess"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeServices",
+          "ecs:UpdateService",
+          "ecs:DescribeTaskDefinition",
+          "ecs:RegisterTaskDefinition",
+          "ecs:ListTaskDefinitions"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EKSReadOnly"
+        Effect = "Allow"
+        Action = [
+          "eks:DescribeCluster",
+          "eks:ListClusters"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "SSMReadSocialApp"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter", "ssm:GetParameters"]
+        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/social-app/*"
+      },
+      {
+        Sid      = "PassECSRole"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = aws_iam_role.ecs_task_execution_role.arn
       }
     ]
   })
@@ -436,246 +600,164 @@ resource "aws_iam_instance_profile" "jenkins_profile" {
   role = aws_iam_role.jenkins_role.name
 }
 
-# Jenkins EC2 Instance
 resource "aws_instance" "jenkins" {
-  ami                    = "ami-0c02fb55956c7d316"
+  ami                    = data.aws_ami.amazon_linux_2023.id
   instance_type          = "t3.medium"
-  # key_name = "social-app-keypair"
   vpc_security_group_ids = [aws_security_group.jenkins.id]
-  subnet_id             = aws_subnet.public[0].id
-  iam_instance_profile  = aws_iam_instance_profile.jenkins_profile.name
+  subnet_id              = aws_subnet.public[0].id
+  iam_instance_profile   = aws_iam_instance_profile.jenkins_profile.name
 
-  user_data = base64encode(file("jenkins-userdata-robust.sh"))
+  user_data                   = base64encode(file("jenkins-userdata-robust.sh"))
   user_data_replace_on_change = true
 
   root_block_device {
-    volume_size = 20
+    volume_size = 30
     volume_type = "gp3"
+    encrypted   = true
   }
 
-  tags = {
-    Name = "Jenkins-Server"
-  }
+  tags = { Name = "Jenkins-Server" }
 }
 
 resource "aws_eip" "jenkins" {
-  instance = aws_instance.jenkins.id
-  domain   = "vpc"
-
-  lifecycle {
-    create_before_destroy = false
-  }
-
-  depends_on = [
-    aws_internet_gateway.main,
-    aws_instance.jenkins
-  ]
-}
-
-# Jira Integration - SSM Parameters
-resource "aws_ssm_parameter" "jira_url" {
-  name        = "/social-app/jira/url"
-  description = "Jira instance URL"
-  type        = "String"
-  value       = var.jira_url
-
-  tags = {
-    Name = "${var.project_name}-jira-url"
-  }
-}
-
-resource "aws_ssm_parameter" "jira_username" {
-  name        = "/social-app/jira/username"
-  description = "Jira username/email"
-  type        = "String"
-  value       = var.jira_username
-  overwrite   = true
-
-  tags = {
-    Name = "${var.project_name}-jira-username"
-  }
-}
-
-resource "aws_ssm_parameter" "jira_api_token" {
-  name        = "/social-app/jira/api-token"
-  description = "Jira API token"
-  type        = "SecureString"
-  value       = var.jira_api_token
-  overwrite   = true
-
-  tags = {
-    Name = "${var.project_name}-jira-api-token"
-  }
-}
-
-resource "aws_ssm_parameter" "jira_project_key" {
-  name        = "/social-app/jira/project-key"
-  description = "Jira project key (e.g., SAC)"
-  type        = "String"
-  value       = var.jira_project_key
-  overwrite   = true
-
-  tags = {
-    Name = "${var.project_name}-jira-project-key"
-  }
-}
-
-resource "aws_ssm_parameter" "jira_issue_type" {
-  name        = "/social-app/jira/issue-type"
-  description = "Jira issue type (e.g., Story, Bug, Epic)"
-  type        = "String"
-  value       = var.jira_issue_type
-  overwrite   = true
-
-  tags = {
-    Name = "${var.project_name}-jira-issue-type"
-  }
+  instance   = aws_instance.jenkins.id
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.main]
+  tags       = { Name = "${var.project_name}-jenkins-eip" }
 }
 
 # ============================================================================
-# EKS CLUSTER CONFIGURATION
+# EKS
 # ============================================================================
 
-# IAM Role for EKS Cluster
 resource "aws_iam_role" "eks_cluster_role" {
   name = "${var.project_name}-eks-cluster-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      }
-    ]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+    }]
   })
 
-  tags = {
-    Name = "${var.project_name}-eks-cluster-role"
-  }
+  tags = { Name = "${var.project_name}-eks-cluster-role" }
 }
 
-# Attach EKS Cluster Policy
 resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
   role       = aws_iam_role.eks_cluster_role.name
 }
 
-# IAM Role for EKS Node Group
-resource "aws_iam_role" "eks_node_role" {
-  name = "${var.project_name}-eks-node-role"
+# Fargate pod execution role (replaces EC2 node role — no idle EC2 costs)
+resource "aws_iam_role" "eks_fargate_role" {
+  name = "${var.project_name}-eks-fargate-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "eks-fargate-pods.amazonaws.com" }
+    }]
   })
 
-  tags = {
-    Name = "${var.project_name}-eks-node-role"
-  }
+  tags = { Name = "${var.project_name}-eks-fargate-role" }
 }
 
-# Attach required policies to Node Group Role
-resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.eks_node_role.name
+resource "aws_iam_role_policy_attachment" "eks_fargate_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy"
+  role       = aws_iam_role.eks_fargate_role.name
 }
 
-resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-  role       = aws_iam_role.eks_node_role.name
-}
-
-resource "aws_iam_role_policy_attachment" "eks_container_registry_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-  role       = aws_iam_role.eks_node_role.name
-}
-
-# EKS Cluster
 resource "aws_eks_cluster" "main" {
   name     = "${var.project_name}-eks"
   role_arn = aws_iam_role.eks_cluster_role.arn
-  version  = "1.28"
+  version  = "1.30"
 
   vpc_config {
-    subnet_ids              = aws_subnet.public[*].id
+    subnet_ids              = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
     endpoint_public_access  = true
     endpoint_private_access = true
   }
 
-  depends_on = [
-    aws_iam_role_policy_attachment.eks_cluster_policy,
-  ]
+  depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
 
-  tags = {
-    Name = "${var.project_name}-eks-cluster"
-  }
+  tags = { Name = "${var.project_name}-eks-cluster" }
 }
 
-# EKS Node Group
-resource "aws_eks_node_group" "main" {
-  cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "${var.project_name}-node-group"
-  node_role_arn   = aws_iam_role.eks_node_role.arn
-  subnet_ids      = aws_subnet.public[*].id
+# Fargate profile — app workloads + monitoring + argocd
+resource "aws_eks_fargate_profile" "app" {
+  cluster_name           = aws_eks_cluster.main.name
+  fargate_profile_name   = "${var.project_name}-app"
+  pod_execution_role_arn = aws_iam_role.eks_fargate_role.arn
+  subnet_ids             = aws_subnet.private[*].id
 
-  scaling_config {
-    desired_size = 2
-    max_size     = 3
-    min_size     = 1
-  }
+  selector { namespace = "default" }
+  selector { namespace = "social-app" }
+  selector { namespace = "monitoring" }
+  selector { namespace = "argocd" }
 
-  instance_types = ["t3.medium"]
+  depends_on = [aws_iam_role_policy_attachment.eks_fargate_policy]
 
-  # Force update of desired size to 0 on destroy
-  lifecycle {
-    create_before_destroy = false
-    ignore_changes        = [scaling_config[0].desired_size]
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.eks_worker_node_policy,
-    aws_iam_role_policy_attachment.eks_cni_policy,
-    aws_iam_role_policy_attachment.eks_container_registry_policy,
-  ]
-
-  tags = {
-    Name = "${var.project_name}-node-group"
-  }
+  tags = { Name = "${var.project_name}-fargate-app" }
 }
 
-# EKS Add-on: CoreDNS
-resource "aws_eks_addon" "coredns" {
-  cluster_name  = aws_eks_cluster.main.name
-  addon_name    = "coredns"
-  addon_version = "v1.10.1-eksbuild.6"
+# Fargate profile — CoreDNS only (kube-system)
+resource "aws_eks_fargate_profile" "kube_system" {
+  cluster_name           = aws_eks_cluster.main.name
+  fargate_profile_name   = "${var.project_name}-kube-system"
+  pod_execution_role_arn = aws_iam_role.eks_fargate_role.arn
+  subnet_ids             = aws_subnet.private[*].id
 
-  depends_on = [
-    aws_eks_node_group.main
-  ]
+  selector {
+    namespace = "kube-system"
+    labels    = { "k8s-app" = "kube-dns" }
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.eks_fargate_policy]
+
+  tags = { Name = "${var.project_name}-fargate-kube-system" }
 }
 
-# EKS Add-on: kube-proxy
-resource "aws_eks_addon" "kube_proxy" {
-  cluster_name  = aws_eks_cluster.main.name
-  addon_name    = "kube-proxy"
-  addon_version = "v1.28.4-eksbuild.1"
-}
-
-# EKS Add-on: VPC CNI
+# vpc-cni is required for cluster networking even on Fargate
 resource "aws_eks_addon" "vpc_cni" {
   cluster_name  = aws_eks_cluster.main.name
   addon_name    = "vpc-cni"
-  addon_version = "v1.15.5-eksbuild.1"
+  addon_version = "v1.18.1-eksbuild.3"
+  depends_on    = [aws_eks_fargate_profile.app]
+}
+
+# CoreDNS — patched to run on Fargate (removes ec2 compute-type annotation)
+resource "aws_eks_addon" "coredns" {
+  cluster_name  = aws_eks_cluster.main.name
+  addon_name    = "coredns"
+  addon_version = "v1.11.1-eksbuild.9"
+
+  configuration_values = jsonencode({
+    computeType = "Fargate"
+    replicaCount = 2
+    resources = {
+      limits   = { cpu = "0.25", memory = "256M" }
+      requests = { cpu = "0.25", memory = "256M" }
+    }
+  })
+
+  depends_on = [aws_eks_fargate_profile.kube_system]
+}
+
+# Patch CoreDNS deployment to remove ec2 annotation so Fargate can schedule it
+resource "null_resource" "coredns_fargate_patch" {
+  depends_on = [aws_eks_addon.coredns]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws eks update-kubeconfig --region ${var.aws_region} --name ${aws_eks_cluster.main.name}
+      kubectl patch deployment coredns \
+        -n kube-system \
+        --type json \
+        -p '[{"op":"remove","path":"/spec/template/metadata/annotations/eks.amazonaws.com~1compute-type"}]' || true
+    EOT
+  }
 }

@@ -2,9 +2,13 @@ class SocialApp {
     constructor() {
         this.socket = io();
         this.username = '';
+        this.token = null;
         this.posts = [];
         this.isTyping = false;
-        
+        this.offset = 0;
+        this.hasMore = true;
+        this.loadingMore = false;
+
         this.init();
     }
 
@@ -17,40 +21,41 @@ class SocialApp {
     }
 
     setupSocketListeners() {
-        // Connection events
         this.socket.on('connect', () => {
-            console.log('✅ Connected to server');
             this.showToast('Connected to server', 'success');
         });
 
         this.socket.on('disconnect', () => {
-            console.log('❌ Disconnected from server');
             this.showToast('Disconnected from server', 'error');
         });
 
-        // Real-time events
         this.socket.on('newPost', (post) => {
+            this.posts.unshift(post);
             this.addPostToFeed(post, true);
             this.updateStats();
-            this.addActivity(`📝 ${post.author} shared a new post`);
+            this.addActivity(`${post.author} shared a new post`);
         });
 
         this.socket.on('postLiked', (data) => {
-            this.updatePostLikes(data.postId, data.likes);
+            const post = this.posts.find(p => p.id === data.postId);
+            if (post) post.likes = data.likes;
+            this.syncLikeCount(data.postId, data.likes);
         });
 
         this.socket.on('newComment', (data) => {
-            this.addCommentToPost(data.postId, data.comment);
-            this.addActivity(`💬 ${data.comment.author} commented on a post`);
+            const post = this.posts.find(p => p.id === data.postId);
+            if (post) post.comments.push(data.comment);
+            this.appendCommentToDOM(data.postId, data.comment);
+            this.addActivity(`${data.comment.author} commented on a post`);
         });
 
         this.socket.on('userJoined', (username) => {
-            this.addActivity(`👋 ${username} joined the community`);
+            this.addActivity(`${username} joined the community`);
             this.showToast(`${username} joined!`, 'info');
         });
 
         this.socket.on('userLeft', (username) => {
-            this.addActivity(`👋 ${username} left the community`);
+            this.addActivity(`${username} left the community`);
         });
 
         this.socket.on('userCountUpdate', (count) => {
@@ -60,96 +65,153 @@ class SocialApp {
         this.socket.on('userTyping', (data) => {
             this.showTypingIndicator(data.username);
         });
+
+        this.socket.on('postDeleted', (data) => {
+            this.posts = this.posts.filter(p => p.id !== data.postId);
+            const el = document.querySelector(`[data-post-id="${data.postId}"]`);
+            if (el) el.remove();
+        });
     }
 
     setupEventListeners() {
-        // Welcome modal
         document.getElementById('join-btn').addEventListener('click', () => this.joinCommunity());
         document.getElementById('username-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.joinCommunity();
         });
 
-        // Post creation
         const postContent = document.getElementById('post-content');
-        const postBtn = document.getElementById('post-btn');
-        
         postContent.addEventListener('input', () => {
             this.updateCharCount();
             this.handleTyping();
         });
-        
-        postBtn.addEventListener('click', () => this.createPost());
-        
+
+        document.getElementById('post-btn').addEventListener('click', () => this.createPost());
         postContent.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                this.createPost();
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) this.createPost();
+        });
+
+        // Event delegation — no more inline onclick handlers
+        const feed = document.getElementById('posts-feed');
+        feed.addEventListener('click', (e) => {
+            const likeBtn = e.target.closest('.like-btn');
+            const toggleBtn = e.target.closest('.comment-toggle-btn');
+            const deleteBtn = e.target.closest('.delete-btn');
+            const commentSubmit = e.target.closest('.comment-btn');
+
+            if (likeBtn) this.likePost(likeBtn.dataset.postId);
+            if (toggleBtn) this.toggleComments(toggleBtn.dataset.postId);
+            if (deleteBtn) this.deletePost(deleteBtn.dataset.postId);
+            if (commentSubmit) this.addComment(commentSubmit.dataset.postId, commentSubmit);
+        });
+
+        feed.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && e.target.classList.contains('comment-input')) {
+                const postId = e.target.dataset.postId;
+                const btn = e.target.nextElementSibling;
+                this.addComment(postId, btn);
             }
         });
 
-        // Auto-refresh data
+        document.getElementById('load-more-btn').addEventListener('click', () => {
+            this.loadPosts(this.offset, true);
+        });
+
         setInterval(() => {
             this.updateStats();
             this.loadTrending();
-        }, 30000); // Every 30 seconds
+        }, 30000);
     }
 
     showWelcomeModal() {
         document.getElementById('welcome-modal').style.display = 'flex';
     }
 
-    joinCommunity() {
+    async joinCommunity() {
         const usernameInput = document.getElementById('username-input');
         const username = usernameInput.value.trim();
-        
+
         if (!username) {
             this.showToast('Please enter your name', 'error');
             return;
         }
 
-        if (username.length > 30) {
-            this.showToast('Name must be 30 characters or less', 'error');
-            return;
-        }
+        try {
+            const res = await fetch('/api/auth/join', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
 
-        this.username = username;
-        
-        // Hide modal and show app
-        document.getElementById('welcome-modal').style.display = 'none';
-        document.querySelector('.post-creator').style.display = 'block';
-        document.getElementById('username-display').textContent = username;
-        
-        // Join socket room
-        this.socket.emit('joinRoom', username);
-        
-        // Load initial data
-        this.loadPosts();
-        
-        this.showToast(`Welcome, ${username}!`, 'success');
+            if (!res.ok) {
+                const err = await res.json();
+                this.showToast(err.error || 'Failed to join', 'error');
+                return;
+            }
+
+            const data = await res.json();
+            this.token = data.token;
+            this.username = data.username;
+
+            document.getElementById('welcome-modal').style.display = 'none';
+            document.querySelector('.post-creator').style.display = 'block';
+            document.getElementById('username-display').textContent = this.username;
+            const avatarEl = document.getElementById('creator-avatar');
+            if (avatarEl) avatarEl.textContent = this.username[0].toUpperCase();
+
+            this.socket.emit('joinRoom', this.username);
+            this.loadPosts(0, false);
+            this.showToast(`Welcome, ${this.username}!`, 'success');
+        } catch {
+            this.showToast('Failed to join — server error', 'error');
+        }
     }
 
-    async loadPosts() {
+    authHeaders() {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.token}`
+        };
+    }
+
+    async loadPosts(offset = 0, append = false) {
+        if (this.loadingMore) return;
+        this.loadingMore = true;
+
         try {
-            const response = await fetch('/api/posts');
-            if (!response.ok) throw new Error('Failed to load posts');
-            
-            this.posts = await response.json();
-            this.renderPosts();
+            const res = await fetch(`/api/posts?limit=20&offset=${offset}`);
+            if (!res.ok) throw new Error('Failed to load posts');
+
+            const data = await res.json();
+            this.hasMore = data.hasMore;
+            this.offset = offset + data.posts.length;
+
+            const loadMoreBtn = document.getElementById('load-more-btn');
+            loadMoreBtn.style.display = data.hasMore ? 'block' : 'none';
+
+            if (append) {
+                data.posts.forEach(post => this.addPostToFeed(post, false));
+            } else {
+                this.posts = data.posts;
+                this.renderPosts();
+            }
+
             this.hideLoading();
-        } catch (error) {
-            console.error('Error loading posts:', error);
+        } catch {
             this.showToast('Failed to load posts', 'error');
             this.hideLoading();
+        } finally {
+            this.loadingMore = false;
         }
     }
 
     renderPosts() {
         const feed = document.getElementById('posts-feed');
         feed.innerHTML = '';
-        
+
         if (this.posts.length === 0) {
             feed.innerHTML = `
                 <div class="empty-state">
-                    <i class="fas fa-comments fa-3x" style="color: var(--text-muted); margin-bottom: 16px;"></i>
+                    <i class="fas fa-comments fa-3x"></i>
                     <h3>No posts yet</h3>
                     <p>Be the first to share something!</p>
                 </div>
@@ -163,8 +225,10 @@ class SocialApp {
     addPostToFeed(post, prepend = false) {
         const feed = document.getElementById('posts-feed');
         const postElement = this.createPostElement(post);
-        
+
         if (prepend) {
+            const empty = feed.querySelector('.empty-state');
+            if (empty) empty.remove();
             feed.insertBefore(postElement, feed.firstChild);
         } else {
             feed.appendChild(postElement);
@@ -175,52 +239,43 @@ class SocialApp {
         const postDiv = document.createElement('div');
         postDiv.className = 'post';
         postDiv.setAttribute('data-post-id', post.id);
-        
+
         const timeAgo = this.formatTimeAgo(new Date(post.timestamp));
         const isMyPost = post.author === this.username;
-        
+
         postDiv.innerHTML = `
             <div class="post-header">
-                <div class="post-author-info">
-                    <div class="post-author">${this.escapeHtml(post.author)}</div>
-                    <div class="post-time">${timeAgo}</div>
+                <div class="post-author-row">
+                    <div class="avatar">${this.escapeHtml(post.author)[0].toUpperCase()}</div>
+                    <div class="post-author-info">
+                        <div class="post-author">${this.escapeHtml(post.author)}</div>
+                        <div class="post-time">${timeAgo}</div>
+                    </div>
                 </div>
-                ${isMyPost ? `<button class="post-menu" onclick="socialApp.deletePost('${post.id}')"><i class="fas fa-trash"></i></button>` : ''}
+                ${isMyPost ? `<button class="post-menu delete-btn" data-post-id="${post.id}" aria-label="Delete post"><i class="fas fa-trash-can"></i></button>` : ''}
             </div>
             <div class="post-content">${this.formatPostContent(post.content)}</div>
             <div class="post-actions">
-                <button class="action-btn like-btn" onclick="socialApp.likePost('${post.id}')">
+                <button class="action-btn like-btn" data-post-id="${post.id}" aria-label="Like post">
                     <i class="fas fa-heart"></i>
                     <span class="like-count">${post.likes}</span>
                 </button>
-                <button class="action-btn" onclick="socialApp.toggleComments('${post.id}')">
+                <button class="action-btn comment-toggle-btn" data-post-id="${post.id}" aria-label="Toggle comments">
                     <i class="fas fa-comment"></i>
-                    <span>${post.comments.length}</span>
-                </button>
-                <button class="action-btn">
-                    <i class="fas fa-share"></i>
-                    Share
+                    <span class="comment-count">${post.comments.length}</span>
                 </button>
             </div>
             <div class="comments-section" id="comments-${post.id}" style="display: none;">
                 <div class="comments-list">
-                    ${post.comments.map(comment => this.createCommentHTML(comment)).join('')}
+                    ${post.comments.map(c => this.createCommentHTML(c)).join('')}
                 </div>
                 <div class="comment-form">
-                    <input type="text" class="comment-input" placeholder="Write a comment..." maxlength="200">
-                    <button class="comment-btn" onclick="socialApp.addComment('${post.id}', this)">Post</button>
+                    <input type="text" class="comment-input" data-post-id="${post.id}" placeholder="Write a comment..." maxlength="200">
+                    <button class="comment-btn" data-post-id="${post.id}">Post</button>
                 </div>
             </div>
         `;
-        
-        // Add enter key listener for comment input
-        const commentInput = postDiv.querySelector('.comment-input');
-        commentInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.addComment(post.id, e.target.nextElementSibling);
-            }
-        });
-        
+
         return postDiv;
     }
 
@@ -239,192 +294,197 @@ class SocialApp {
 
     async createPost() {
         const content = document.getElementById('post-content').value.trim();
-        
         if (!content) {
             this.showToast('Please write something!', 'error');
             return;
         }
 
-        if (!this.username) {
-            this.showToast('Please join the community first', 'error');
-            return;
-        }
+        const btn = document.getElementById('post-btn');
+        btn.disabled = true;
 
         try {
-            const response = await fetch('/api/posts', {
+            const res = await fetch('/api/posts', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content,
-                    author: this.username
-                })
+                headers: this.authHeaders(),
+                body: JSON.stringify({ content })
             });
 
-            if (!response.ok) throw new Error('Failed to create post');
+            if (!res.ok) {
+                const err = await res.json();
+                this.showToast(err.error || 'Failed to create post', 'error');
+                return;
+            }
 
             document.getElementById('post-content').value = '';
             this.updateCharCount();
             this.showToast('Post shared!', 'success');
-            
-        } catch (error) {
-            console.error('Error creating post:', error);
+        } catch {
             this.showToast('Failed to create post', 'error');
+        } finally {
+            btn.disabled = false;
         }
     }
 
     async likePost(postId) {
+        // Optimistic update
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        const likeBtn = postEl && postEl.querySelector('.like-btn');
+        const likeCount = postEl && postEl.querySelector('.like-count');
+        const currentLikes = parseInt(likeCount && likeCount.textContent) || 0;
+        const wasLiked = likeBtn && likeBtn.classList.contains('liked');
+
+        if (likeCount) likeCount.textContent = wasLiked ? currentLikes - 1 : currentLikes + 1;
+        if (likeBtn) likeBtn.classList.toggle('liked');
+
         try {
-            const response = await fetch(`/api/posts/${postId}/like`, {
-                method: 'POST'
+            const res = await fetch(`/api/posts/${postId}/like`, {
+                method: 'POST',
+                headers: this.authHeaders()
             });
 
-            if (!response.ok) throw new Error('Failed to like post');
-            
-        } catch (error) {
-            console.error('Error liking post:', error);
+            if (!res.ok) throw new Error('Like failed');
+
+            const data = await res.json();
+            if (likeCount) likeCount.textContent = data.likes;
+            if (likeBtn) {
+                likeBtn.classList.toggle('liked', data.liked);
+            }
+        } catch {
+            // Revert on error
+            if (likeCount) likeCount.textContent = currentLikes;
+            if (likeBtn) likeBtn.classList.toggle('liked', wasLiked);
             this.showToast('Failed to like post', 'error');
         }
     }
 
-    updatePostLikes(postId, likes) {
-        const post = document.querySelector(`[data-post-id="${postId}"]`);
-        if (post) {
-            const likeCount = post.querySelector('.like-count');
-            const likeBtn = post.querySelector('.like-btn');
-            if (likeCount) {
-                likeCount.textContent = likes;
-                likeBtn.classList.add('liked');
-                setTimeout(() => likeBtn.classList.remove('liked'), 300);
-            }
-        }
+    syncLikeCount(postId, likes) {
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        if (!postEl) return;
+        const likeCount = postEl.querySelector('.like-count');
+        if (likeCount) likeCount.textContent = likes;
     }
 
     toggleComments(postId) {
-        const commentsSection = document.getElementById(`comments-${postId}`);
-        const isVisible = commentsSection.style.display !== 'none';
-        commentsSection.style.display = isVisible ? 'none' : 'block';
+        const section = document.getElementById(`comments-${postId}`);
+        if (section) section.style.display = section.style.display !== 'none' ? 'none' : 'block';
     }
 
     async addComment(postId, buttonElement) {
-        const input = buttonElement.previousElementSibling;
-        const content = input.value.trim();
-        
+        const form = buttonElement.closest('.comment-form');
+        const input = form && form.querySelector('.comment-input');
+        const content = input && input.value.trim();
         if (!content) return;
 
+        buttonElement.disabled = true;
+
         try {
-            const response = await fetch(`/api/posts/${postId}/comments`, {
+            const res = await fetch(`/api/posts/${postId}/comments`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content,
-                    author: this.username
-                })
+                headers: this.authHeaders(),
+                body: JSON.stringify({ content })
             });
 
-            if (!response.ok) throw new Error('Failed to add comment');
+            if (!res.ok) {
+                const err = await res.json();
+                this.showToast(err.error || 'Failed to add comment', 'error');
+                return;
+            }
 
             input.value = '';
-            
-        } catch (error) {
-            console.error('Error adding comment:', error);
+        } catch {
             this.showToast('Failed to add comment', 'error');
+        } finally {
+            buttonElement.disabled = false;
         }
     }
 
-    addCommentToPost(postId, comment) {
-        const commentsSection = document.getElementById(`comments-${postId}`);
-        if (commentsSection) {
-            const commentsList = commentsSection.querySelector('.comments-list');
-            const commentElement = document.createElement('div');
-            commentElement.innerHTML = this.createCommentHTML(comment);
-            commentsList.appendChild(commentElement.firstElementChild);
-            
-            // Update comment count
-            const post = document.querySelector(`[data-post-id="${postId}"]`);
-            const commentBtn = post.querySelector('.action-btn:nth-child(2) span');
-            const currentCount = parseInt(commentBtn.textContent);
-            commentBtn.textContent = currentCount + 1;
-        }
+    appendCommentToDOM(postId, comment) {
+        const section = document.getElementById(`comments-${postId}`);
+        if (!section) return;
+
+        const list = section.querySelector('.comments-list');
+        const el = document.createElement('div');
+        el.innerHTML = this.createCommentHTML(comment);
+        list.appendChild(el.firstElementChild);
+
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        const countEl = postEl && postEl.querySelector('.comment-count');
+        if (countEl) countEl.textContent = parseInt(countEl.textContent) + 1;
     }
 
     async deletePost(postId) {
-        if (!confirm('Are you sure you want to delete this post?')) return;
+        if (!confirm('Delete this post?')) return;
 
         try {
-            const response = await fetch(`/api/posts/${postId}`, {
-                method: 'DELETE'
+            const res = await fetch(`/api/posts/${postId}`, {
+                method: 'DELETE',
+                headers: this.authHeaders()
             });
 
-            if (!response.ok) throw new Error('Failed to delete post');
-
-            const postElement = document.querySelector(`[data-post-id="${postId}"]`);
-            if (postElement) {
-                postElement.style.animation = 'fadeOut 0.3s ease-out';
-                setTimeout(() => postElement.remove(), 300);
+            if (!res.ok) {
+                const err = await res.json();
+                this.showToast(err.error || 'Failed to delete post', 'error');
+                return;
             }
-            
+
+            this.posts = this.posts.filter(p => p.id !== postId);
+            const el = document.querySelector(`[data-post-id="${postId}"]`);
+            if (el) {
+                el.style.animation = 'fadeOut 0.3s ease-out';
+                setTimeout(() => el.remove(), 300);
+            }
             this.showToast('Post deleted', 'success');
-            
-        } catch (error) {
-            console.error('Error deleting post:', error);
+        } catch {
             this.showToast('Failed to delete post', 'error');
         }
     }
 
     async updateStats() {
         try {
-            const response = await fetch('/api/stats');
-            if (!response.ok) return;
-            
-            const stats = await response.json();
-            
+            const res = await fetch('/api/stats');
+            if (!res.ok) return;
+            const stats = await res.json();
             document.getElementById('total-posts').textContent = stats.totalPosts;
             document.getElementById('total-likes').textContent = stats.totalLikes;
             document.getElementById('total-comments').textContent = stats.totalComments;
             document.getElementById('online-users').textContent = stats.onlineUsers;
-            
-        } catch (error) {
-            console.error('Error updating stats:', error);
-        }
+        } catch { /* silent */ }
     }
 
     async loadTrending() {
         try {
-            const response = await fetch('/api/trending');
-            if (!response.ok) return;
-            
-            const trending = await response.json();
+            const res = await fetch('/api/trending');
+            if (!res.ok) return;
+            const trending = await res.json();
             const container = document.getElementById('trending-topics');
-            
+
             if (trending.length === 0) {
                 container.innerHTML = '<div class="text-muted">No trending topics yet</div>';
                 return;
             }
-            
+
             container.innerHTML = trending.map(item => `
                 <div class="trending-item">
-                    <span class="hashtag">${item.tag}</span>
+                    <span class="hashtag">${this.escapeHtml(item.tag)}</span>
                     <span class="count">${item.count} posts</span>
                 </div>
             `).join('');
-            
-        } catch (error) {
-            console.error('Error loading trending:', error);
-        }
+        } catch { /* silent */ }
     }
 
     updateCharCount() {
         const content = document.getElementById('post-content').value;
         const charCount = document.getElementById('char-count');
         const postBtn = document.getElementById('post-btn');
-        
+
         charCount.textContent = `${content.length}/500`;
         postBtn.disabled = content.trim().length === 0 || content.length > 500;
-        
-        if (content.length > 450) {
-            charCount.style.color = 'var(--warning-color)';
-        } else if (content.length > 480) {
+
+        // Order matters: check higher threshold first
+        if (content.length > 480) {
             charCount.style.color = 'var(--danger-color)';
+        } else if (content.length > 450) {
+            charCount.style.color = 'var(--warning-color)';
         } else {
             charCount.style.color = 'var(--text-muted)';
         }
@@ -434,15 +494,12 @@ class SocialApp {
         if (!this.isTyping) {
             this.isTyping = true;
             this.socket.emit('userTyping', { username: this.username });
-            
-            setTimeout(() => {
-                this.isTyping = false;
-            }, 3000);
+            setTimeout(() => { this.isTyping = false; }, 3000);
         }
     }
 
     showTypingIndicator(username) {
-        this.addActivity(`✏️ ${username} is typing...`);
+        this.addActivity(`${this.escapeHtml(username)} is typing...`);
     }
 
     addActivity(message) {
@@ -450,21 +507,15 @@ class SocialApp {
         const item = document.createElement('div');
         item.className = 'activity-item';
         item.textContent = message;
-        
+
         feed.insertBefore(item, feed.firstChild);
-        
-        // Remove old items (keep last 10)
+
         while (feed.children.length > 10) {
             feed.removeChild(feed.lastChild);
         }
-        
-        // Auto-remove typing indicators
+
         if (message.includes('typing')) {
-            setTimeout(() => {
-                if (item.parentNode) {
-                    item.remove();
-                }
-            }, 3000);
+            setTimeout(() => { if (item.parentNode) item.remove(); }, 3000);
         }
     }
 
@@ -478,45 +529,34 @@ class SocialApp {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         toast.textContent = message;
-        
         container.appendChild(toast);
-        
+
         setTimeout(() => {
             toast.style.animation = 'toastSlideOut 0.3s ease-out';
-            setTimeout(() => {
-                if (toast.parentNode) {
-                    container.removeChild(toast);
-                }
-            }, 300);
+            setTimeout(() => { if (toast.parentNode) container.removeChild(toast); }, 300);
         }, 3000);
     }
 
     formatTimeAgo(date) {
-        const now = new Date();
-        const diffMs = now - date;
+        const diffMs = Date.now() - date;
         const diffMins = Math.floor(diffMs / 60000);
         const diffHours = Math.floor(diffMs / 3600000);
         const diffDays = Math.floor(diffMs / 86400000);
-        
+
         if (diffMins < 1) return 'Just now';
         if (diffMins < 60) return `${diffMins}m ago`;
         if (diffHours < 24) return `${diffHours}h ago`;
         if (diffDays < 7) return `${diffDays}d ago`;
-        
         return date.toLocaleDateString();
     }
 
     formatPostContent(content) {
-        // Format hashtags
-        content = content.replace(/#(\w+)/g, '<span class="hashtag">#$1</span>');
-        
-        // Format mentions
-        content = content.replace(/@(\w+)/g, '<span class="mention">@$1</span>');
-        
-        // Format line breaks
-        content = content.replace(/\n/g, '<br>');
-        
-        return content;
+        // Escape first — then safe to inject span tags
+        const escaped = this.escapeHtml(content);
+        return escaped
+            .replace(/#(\w+)/g, '<span class="hashtag">#$1</span>')
+            .replace(/@(\w+)/g, '<span class="mention">@$1</span>')
+            .replace(/\n/g, '<br>');
     }
 
     escapeHtml(text) {
@@ -526,32 +566,17 @@ class SocialApp {
     }
 }
 
-// Add CSS for toast slide out animation
 const style = document.createElement('style');
 style.textContent = `
     @keyframes toastSlideOut {
         from { opacity: 1; transform: translateX(0); }
-        to { opacity: 0; transform: translateX(100%); }
+        to   { opacity: 0; transform: translateX(120%) scale(0.9); }
     }
-    
     @keyframes fadeOut {
-        from { opacity: 1; transform: scale(1); }
-        to { opacity: 0; transform: scale(0.9); }
-    }
-    
-    .hashtag { color: var(--primary-color); font-weight: 500; }
-    .mention { color: var(--secondary-color); font-weight: 500; }
-    
-    .empty-state {
-        text-align: center;
-        padding: 60px 20px;
-        color: var(--text-muted);
+        from { opacity: 1; transform: translateY(0) scale(1); }
+        to   { opacity: 0; transform: translateY(-8px) scale(0.95); }
     }
 `;
 document.head.appendChild(style);
 
-// Initialize the app
 const socialApp = new SocialApp();
-
-// Make it globally available for onclick handlers
-window.socialApp = socialApp;

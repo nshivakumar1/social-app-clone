@@ -6,7 +6,7 @@ metadata:
   labels:
     app: social-app-clone
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app: social-app-clone
   ports:

@@ -32,7 +32,6 @@ jobs:
       - name: Run ESLint
         working-directory: app
         run: npm run lint
-        continue-on-error: true
 
       - name: Save ESLint report
         if: always()
@@ -114,8 +113,7 @@ jobs:
 
       - name: Run tests with coverage
         working-directory: app
-        run: npm test || echo "No tests configured yet"
-        continue-on-error: true
+        run: npm test
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@master
